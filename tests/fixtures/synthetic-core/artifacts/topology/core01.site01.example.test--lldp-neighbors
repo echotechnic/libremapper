@@ -1,0 +1,97 @@
++--------------------+-----------------------------------------+
+| interface          | 5
+| chassis-id         | 02:ff:01:00:00:01
+| port-id            | 537
+| system-name        | external01.site00.example.test
+| management-address | 198.51.100.11
+
++--------------------+-----------------------------------------+
+| interface          | 6
+| chassis-id         | 02:ff:01:00:00:02
+| port-id            | HundredGigE0/0/0/24
+| system-name        | border01.site01.example.test
+| management-address | 192.0.2.2
+
++--------------------+-----------------------------------------+
+| interface          | 8
+| chassis-id         | 02:ff:01:00:00:03
+| port-id            | sfp28-1
+| system-name        | cust04.site01.example.test
+| management-address | 192.0.2.19
+
++--------------------+-----------------------------------------+
+| interface          | 23
+| chassis-id         | 02:ff:01:00:00:04
+| port-id            | 553
+| system-name        | core03.site01.example.test
+| management-address | 192.0.2.37
+
++--------------------+-----------------------------------------+
+| interface          | 25
+| chassis-id         | 02:ff:01:00:00:05
+| port-id            | sfp28-11
+| system-name        | external03.site00.example.test
+| management-address | 198.51.100.15
+
++--------------------+-----------------------------------------+
+| interface          | 26
+| chassis-id         | 02:ff:01:00:00:06
+| port-id            | sfp28-12
+| system-name        | external03.site00.example.test
+| management-address | 198.51.100.16
+
++--------------------+-----------------------------------------+
+| interface          | 2/1
+| chassis-id         | 02:ff:01:00:00:07
+| port-id            | 2/1
+| system-name        | pop01.site03.example.test
+| management-address | 192.0.2.7
+
++--------------------+-----------------------------------------+
+| interface          | 2/2
+| chassis-id         | 02:ff:01:00:00:08
+| port-id            | 671
+| system-name        | core03.site01.example.test
+| management-address | 192.0.2.37
+
++--------------------+-----------------------------------------+
+| interface          | 2/3
+| chassis-id         | 02:ff:01:00:00:09
+| port-id            | 2/1
+| system-name        | core05.site04.example.test
+| management-address | 192.0.2.8
+
++--------------------+-----------------------------------------+
+| interface          | 2/4
+| chassis-id         | 02:ff:01:00:00:0a
+| port-id            | 2/1
+| system-name        | core08.site07.example.test
+| management-address | 192.0.2.9
+
++--------------------+-----------------------------------------+
+| interface          | 2/5
+| chassis-id         | 02:ff:01:00:00:0b
+| port-id            | 669
+| system-name        | core03.site01.example.test
+| management-address | 192.0.2.37
+
++--------------------+-----------------------------------------+
+| interface          | 2/6
+| chassis-id         | 02:ff:01:00:00:0c
+| port-id            | 2/1
+| system-name        | core09.site08.example.test
+| management-address | 192.0.2.11
+
++--------------------+-----------------------------------------+
+| interface          | 2/7
+| chassis-id         | 02:ff:01:00:00:0d
+| port-id            | 2/1
+| system-name        | core04.site02.example.test
+| management-address | 192.0.2.13
+
++--------------------+-----------------------------------------+
+| interface          | 2/8
+| chassis-id         | 02:ff:01:00:00:0e
+| port-id            | 2
+| system-name        | core07.site06.example.test
+| management-address | 192.0.2.12

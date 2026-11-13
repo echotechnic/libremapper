@@ -1,0 +1,2 @@
+-- Sanitized empty LibreNMS fixture.
+-- The pinned LibreNMS image creates and migrates the current schema after import.

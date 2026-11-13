@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PROJECT="libremapper-realdata-dev"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+LOCAL_DEV_DIR="${ROOT}/.realdata-dev"
+export LOCAL_DEV_DIR
+
+exec docker compose \
+  --project-name "${PROJECT}" \
+  --env-file "${LOCAL_DEV_DIR}/.env" \
+  --env-file "${LOCAL_DEV_DIR}/image.env" \
+  --file "${ROOT}/dev/compose.yaml" \
+  exec -T librenms php /opt/librenms/libremapper-link-adapter.php

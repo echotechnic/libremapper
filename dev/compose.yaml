@@ -1,0 +1,104 @@
+services:
+  db:
+    image: ${MARIADB_IMAGE}
+    environment:
+      MARIADB_DATABASE: ${DB_NAME}
+      MARIADB_USER: ${DB_USER}
+      MARIADB_PASSWORD: ${DB_PASSWORD}
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test:
+        - CMD
+        - healthcheck.sh
+        - --connect
+        - --innodb_initialized
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - db-data:/var/lib/mysql
+    networks:
+      - backend
+    restart: "no"
+
+  librenms:
+    image: ${LIBRENMS_IMAGE}
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_PORT: "3306"
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_TIMEOUT: "180"
+      TZ: ${TZ:-America/Los_Angeles}
+      LIBREMAPPER_DISABLE_SERVICES: "true"
+      LIBREMAPPER_API_URL: http://127.0.0.1:8001
+    ports:
+      - 127.0.0.1:18201:8000
+    volumes:
+      - librenms-data:/data
+      - libremapper-data:/data/libremapper
+      - ${LOCAL_DEV_DIR}/config:/config
+      - ${LOCAL_DEV_DIR}/artifacts:/oxidized:ro
+      - ../composer.json:/opt/libremapper/package/composer.json:ro
+      - ../plugin:/opt/libremapper/package/plugin:ro
+      - ../skills:/opt/libremapper/package/skills:ro
+      - ../plugin/docker/08-libremapper.sh:/etc/cont-init.d/08-libremapper.sh:ro
+    networks:
+      - backend
+      - web
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    restart: "no"
+
+  libremapper:
+    build:
+      context: ..
+    image: libremapper-realdata-dev-sidecar:local
+    network_mode: service:librenms
+    environment:
+      DB_HOST: db
+      DB_PORT: "3306"
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      LIBREMAPPER_API_TOKEN: ${LIBREMAPPER_API_TOKEN}
+      PUID: "1000"
+      PGID: "1000"
+    volumes:
+      - libremapper-data:/data/libremapper
+      - ${LOCAL_DEV_DIR}/config:/config
+      - ${LOCAL_DEV_DIR}/artifacts:/oxidized:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: "no"
+
+networks:
+  backend:
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.127.250.0/24
+  web:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.127.251.0/24
+
+volumes:
+  db-data:
+  librenms-data:
+  libremapper-data:

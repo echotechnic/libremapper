@@ -1,0 +1,635 @@
+const fs = require('node:fs');
+const { chromium } = require('playwright');
+function check(value, message) { if (!value) throw new Error(message); }
+(async () => {
+  const browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext({ viewport: { width: 1600, height: 1100 } });
+  const page = await context.newPage();
+  const base = process.env.LIBRENMS_URL;
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  async function submit(button) {
+    process.stdout.write('Browser: ' + (await button.innerText()).trim() + '\n');
+    await Promise.all([page.waitForNavigation(), button.click()]);
+    const error = page.locator('.alert-danger[role="alert"]');
+    if (await error.count()) throw new Error(await error.first().innerText());
+  }
+  async function subtab(name) { await Promise.all([page.waitForNavigation(), page.locator('.workspace-subtabs').getByRole('link', {name, exact:true}).click()]); }
+  async function tab(name, section) { await Promise.all([page.waitForNavigation(), page.locator('.nav-tabs').getByRole('link', {name, exact:true}).click()]); if (section) await subtab(section); }
+  async function review() { await submit(page.locator('#map-header').getByRole('button', {name:'Review changes'})); }
+  async function publish() {
+    const warning = page.locator('input[name="confirm_warnings"]');
+    if (await warning.count()) await warning.check();
+    await submit(page.getByRole('button', {name:'Publish to LibreNMS', exact:true}));
+    check((await page.locator('#map-header').innerText()).includes('Published · current'), 'Publication must refresh to no-change review.');
+  }
+  async function checkDeviceSelection(kind = 'hostname') {
+    const checkAll = page.locator('#' + kind + '-check-all'), selected = page.locator('#device-list .' + kind + '-device:checked');
+    const form = page.locator(kind === 'hostname' ? '#hostname-label-form' : '#device-placement-form');
+    const apply = form.locator('button[type="submit"]');
+    check(await form.locator('input[type="number"]').count() === 1 && await apply.isDisabled(), 'One shared field must require a device selection.');
+    const rows = page.locator('#device-list tbody tr:visible');
+    const firstHostname = await rows.nth(0).locator('td small').innerText();
+    const secondHostname = await rows.nth(1).locator('td small').innerText();
+    await page.locator('#device-search').fill(firstHostname);
+    await checkAll.check();
+    check(await selected.count() === 1 && await apply.isEnabled(), 'Check all must select only the filtered device.');
+    await page.locator('#device-search').fill(secondHostname);
+    check(!await checkAll.isChecked() && await selected.count() === 1, 'Filtering must retain the hidden selection without selecting other results.');
+    check((await page.locator('#' + kind + '-hidden-count').innerText()).includes('1 hidden')
+      && (await page.locator('#' + kind + '-impact').innerText()).includes('including 1 hidden'), 'Hidden selections must be visible in the effect summary.');
+    await checkAll.check();
+    check(await selected.count() === 2 && await page.locator('#' + kind + '-selected-count').innerText() === '2 selected', 'The selection count must include hidden devices.');
+    await checkAll.uncheck();
+    check(await selected.count() === 1, 'Unchecking all must clear only visible results.');
+    await page.locator('#device-search').fill('no-matching-device-for-selection');
+    check(await checkAll.isDisabled() && await selected.count() === 1, 'An empty filter result must disable check all and retain selections.');
+    await page.locator('#device-search').fill('');
+    check(await checkAll.evaluate(input => input.indeterminate), 'Partial visible selection must show a mixed check-all state.');
+    await checkAll.check();
+    check(await selected.count() === await rows.count()
+      && await page.locator('#device-list tr[data-in-scope="0"] .' + kind + '-device:checked').count() === 0, 'Check all must respect the current map scope.');
+    await page.locator('#device-list thead').getByRole('button', {name:'Device', exact:true}).click();
+    check(await selected.count() === await rows.count(), 'Sorting must retain selected devices.');
+    await checkAll.uncheck();
+    check(await selected.count() === 0 && await apply.isDisabled(), 'Clearing the selection must disable Apply.');
+  }
+  async function checkDeviceSorting() {
+    check(await page.locator('#device-list thead .device-sort').count() === 5, 'The five device columns must be sortable.');
+    check(await page.locator('#device-list thead th').last().locator('.device-sort').count() === 0, 'Device actions must stay unsortable.');
+    await page.evaluate(() => {
+      const body = document.querySelector('#device-list tbody'), originalRows = [...body.rows];
+      const values = [
+        ['Core10', 'Site 10', 'Rule 10', 10, 9], ['core2', 'Site 2', 'Rule 2', 2, 1],
+        ['CORE1', 'Site 1', 'Rule 1', 1, 0], ['Unreviewed', '', 'Outside scope', 0, null],
+      ];
+      body.replaceChildren(...values.map(([name, location, rule, links, tier], index) => {
+        const row = originalRows[0].cloneNode(true);
+        row.dataset.deviceId = String(9000 + index);
+        row.dataset.inScope = index === 1 || index === 2 ? '1' : '0';
+        const text = [name, location || '—', rule, links, tier === null ? 'Automatic' : (tier === 0 ? 'Core / first tier' : 'Tier ' + (tier + 1))];
+        [...row.cells].slice(0, 5).forEach((cell, column) => {
+          cell.textContent = text[column];
+          if (column === 0 || column === 1 || column === 4) cell.dataset.sortValue = String(column === 4 ? tier ?? '' : values[index][column]);
+        });
+        return row;
+      }));
+      window.restoreDeviceSortRows = () => {
+        body.replaceChildren(...originalRows);
+        document.querySelectorAll('#device-list th[aria-sort]').forEach(header => { header.setAttribute('aria-sort', 'none'); header.querySelector('.sort-direction').textContent = ''; });
+        delete window.restoreDeviceSortRows;
+      };
+    });
+    try {
+      await page.locator('#show-all-devices').check();
+      for (const [column, label, ascending, descending] of [
+        [0, 'Device', ['CORE1', 'core2', 'Core10', 'Unreviewed'], ['Unreviewed', 'Core10', 'core2', 'CORE1']],
+        [1, 'Location', ['—', 'Site 1', 'Site 2', 'Site 10'], ['Site 10', 'Site 2', 'Site 1', '—']],
+        [2, 'Matching rule', ['Outside scope', 'Rule 1', 'Rule 2', 'Rule 10'], ['Rule 10', 'Rule 2', 'Rule 1', 'Outside scope']],
+        [3, 'Discovered links', ['0', '1', '2', '10'], ['10', '2', '1', '0']],
+        [4, 'Placement', ['Core / first tier', 'Tier 2', 'Tier 10', 'Automatic'], ['Tier 10', 'Tier 2', 'Core / first tier', 'Automatic']],
+      ]) {
+        const button = page.locator('#device-list thead').getByRole('button', {name:label, exact:true});
+        const cells = () => page.locator('#device-list tbody tr:visible').evaluateAll((rows, index) => rows.map(row => row.cells[index].textContent.trim()), column);
+        await button.click();
+        check(await button.locator('..').getAttribute('aria-sort') === 'ascending', label + ' must announce ascending sort.');
+        check(JSON.stringify(await cells()) === JSON.stringify(ascending), label + ' ascending order is incorrect.');
+        await button.click();
+        check(await button.locator('..').getAttribute('aria-sort') === 'descending', label + ' must announce descending sort.');
+        check(JSON.stringify(await cells()) === JSON.stringify(descending), label + ' descending order is incorrect.');
+      }
+      await page.locator('#device-search').fill('core2');
+      await page.locator('#device-list thead').getByRole('button', {name:'Discovered links', exact:true}).click();
+      check(await page.locator('#device-list tbody tr:visible').count() === 1
+        && (await page.locator('#device-list tbody tr:visible td').first().innerText()) === 'core2', 'Sorting must preserve the active search filter.');
+      await page.locator('#device-search').fill('');
+      await page.locator('#show-all-devices').uncheck();
+      await page.locator('#device-list thead').getByRole('button', {name:'Device', exact:true}).click();
+      check(await page.locator('#device-list tbody tr:visible').count() === 2, 'Sorting must preserve the current device scope.');
+    } finally {
+      await page.locator('#device-search').fill('');
+      await page.locator('#show-all-devices').uncheck();
+      await page.evaluate(() => window.restoreDeviceSortRows());
+    }
+  }
+  await page.goto(`${base}/login`);
+  await page.locator('#username').fill('admin');
+  await page.locator('#password').fill(process.env.ADMIN_PASSWORD);
+  await Promise.all([page.waitForURL(url => !url.pathname.endsWith('/login')), page.locator('button[type="submit"]').click()]);
+  await page.goto(`${base}/plugin/settings/libremapper?tab=guided&map=__new__`);
+  check(new URL(page.url()).searchParams.get('tab') === 'devices', 'Legacy Guided bookmark must redirect.');
+  await page.locator('#name').fill('Operator Browser');
+  check(await page.locator('input[name="key"]').count() === 0, 'Creation must generate the key.');
+  check(await page.locator('textarea').count() === 0, 'Creation must require no YAML.');
+  await page.locator('.rule-field').selectOption('hostname');
+  await page.locator('.rule-value').fill('^core');
+  await page.locator('.rule-layer').fill('7');
+  await submit(page.getByRole('button', {name:'Create map', exact:true}));
+  check(new URL(page.url()).searchParams.get('map') === 'operator-browser', 'Generated key must select new map.');
+  check(await page.locator('.rule-layer').inputValue() === '7', 'Creation must preserve the scope layer value.');
+  await page.locator('#device-scope-form').screenshot({path:'/artifacts/scope-layer-controls.png'});
+  await review();
+  check(await page.locator('#topology-preview svg').isVisible(), 'Reviewed SVG must render.');
+  const initialCount = Number((await page.locator('#map-header').innerText()).match(/(\d+) devices/)[1]);
+  check(initialCount >= 2, 'Regex must select devices.');
+  await tab('Links');
+  await Promise.all([page.waitForNavigation(), page.locator('.workspace-subtabs').getByRole('link', {name:'Parsers', exact:true}).click()]);
+  const lldpParser = page.locator('[name="parsers[]"][value="saos10-lldp-neighbors"]');
+  const nniParser = page.locator('[name="parsers[]"][value="saos10-nni-config"]');
+  async function oxidizedSection(section) {
+    await page.goto(`${base}/plugin/settings/libremapper?map=operator-browser&tab=links&subtab=parsers&section=${section}`);
+  }
+  check(!await lldpParser.isChecked() && !await nniParser.isChecked(), 'Maps without an Oxidized source must start with parsing off.');
+  check(await page.locator('#oxidized-parser-reports').count() === 0, 'Source must not fetch parser reports.');
+  await tab('Advanced', 'Oxidized connection');
+  await page.locator('#oxidized_mode').selectOption('local');
+  await submit(page.getByRole('button', {name:'Save and test source', exact:true}));
+  await oxidizedSection('source');
+  await lldpParser.check(); await nniParser.check();
+  await submit(page.getByRole('button', {name:'Save parser selection', exact:true}));
+  check(await lldpParser.isChecked() && await nniParser.isChecked(), 'Map save must retain both selected parsers.');
+  await oxidizedSection('report');
+  check(await page.locator('#oxidized-parser-reports tbody tr').count() === 2, 'Both enabled parsers must have scoped reports.');
+  const refreshReport = page.getByRole('link', {name:'Refresh parser report', exact:true});
+  check((await refreshReport.getAttribute('href')).includes('map=operator-browser')
+    && (await refreshReport.getAttribute('href')).includes('section=report'), 'Report refresh must preserve map and section.');
+  await page.screenshot({path:'/artifacts/oxidized-parsers.png', fullPage:true});
+  await oxidizedSection('source'); await lldpParser.uncheck();
+  await submit(page.getByRole('button', {name:'Save parser selection', exact:true}));
+  await oxidizedSection('report');
+  check(await page.locator('#oxidized-parser-reports tbody tr').count() === 1, 'NNI must work independently of LLDP.');
+  await oxidizedSection('source'); await nniParser.uncheck();
+  await submit(page.getByRole('button', {name:'Save parser selection', exact:true}));
+  await oxidizedSection('report');
+  check((await page.locator('#oxidized').innerText()).includes('Parsing is off for this map.'), 'All-disabled selection must be valid.');
+
+  const catalogUrl = `${base}/plugin/settings/libremapper?map=operator-browser&tab=advanced&subtab=parsers`;
+  await page.goto(catalogUrl);
+  check(await page.locator('#parser-form').count() === 0, 'Catalog must not initialize every parser form.');
+  await page.goto(catalogUrl + '&edit=saos10-nni-config');
+  check(await page.locator('#nni-parser-fields').isVisible() && !await page.locator('#regex-parser-fields').isVisible(), 'NNI editing must expose its typed settings.');
+  await page.locator('#parser-peer').fill('^edge\\d+(?:\\.|$)');
+  await page.locator('#parser-interface-types').fill('point-to-point\nnumbered');
+  await page.locator('#parser-ipv4').fill('');
+  await page.locator('#parser-ipv6').fill('invalid');
+  await page.getByRole('button', {name:'Save global parser', exact:true}).click();
+  check(await page.locator('#parser-definition-error').isVisible(), 'Definition errors must remain visible on the Definition tab.');
+  await page.locator('#parser-ipv6').fill('127');
+  await submit(page.getByRole('button', {name:'Save global parser', exact:true}));
+  check(await page.locator('#parser-peer').inputValue() === '^edge\\d+(?:\\.|$)'
+    && await page.locator('#parser-interface-types').inputValue() === 'point-to-point\nnumbered'
+    && await page.locator('#parser-ipv4').inputValue() === '' && await page.locator('#parser-ipv6').inputValue() === '127', 'NNI settings must round-trip, including a disabled address family.');
+  await page.screenshot({path:'/artifacts/nni-parser-editor.png', fullPage:true});
+  page.once('dialog', dialog => dialog.accept());
+  await submit(page.getByRole('button', {name:'Reset to packaged definition', exact:true}));
+
+  await page.goto(catalogUrl + '&clone=saos10-lldp-neighbors');
+  check(await page.locator('#parser-form').count() === 1, 'Only the active parser editor may be initialized.');
+  await page.locator('#parser-id').fill('browser-neighbors');
+  await page.locator('#parser-label').fill('Browser neighbor format');
+  await page.locator('[href="#parser-preview-panel"]').click();
+  const artifactName = fs.readdirSync('/fixtures/artifacts/topology').sort()[0];
+  await page.locator('#preview-filename').fill('topology/' + artifactName);
+  await page.locator('#preview-sample').fill(fs.readFileSync('/fixtures/artifacts/topology/' + artifactName, 'utf8'));
+  const previewResponse = page.waitForResponse(response => response.url().endsWith('/parsers/preview'));
+  await page.getByRole('button', {name:'Run preview', exact:true}).click();
+  check((await previewResponse).ok(), 'Unsaved pasted preview must succeed.');
+  await page.waitForFunction(() => document.querySelector('#run-parser-preview').disabled === false);
+  const previewResult = JSON.parse(await page.locator('#parser-preview-result').innerText());
+  check(previewResult.connection_count > 0 && previewResult.captures.length > 0, 'Preview must show captures and resolved connections.');
+  check(await page.locator('#parser-catalog tr[data-parser-id="browser-neighbors"]').count() === 0, 'Preview must not save the parser.');
+  const unsavedDefinition = await page.evaluate(() => { $('#parser-form').triggerHandler('submit'); return JSON.parse($('#parser-definition').val()); });
+  const csrfToken = await page.locator('#parser-form input[name="_token"]').inputValue();
+  const rawPreview = async (definition, sample) => {
+    const response = await page.request.post(`${base}/plugin/libremapper/parsers/preview`, {headers:{'X-CSRF-TOKEN':csrfToken, 'Accept':'application/json'}, data:{parser_id:'browser-preview', definition, filename:'topology/' + artifactName, sample}});
+    check(response.ok(), 'Raw JSON preview must succeed.'); return response.json();
+  };
+  const emptyPreview = await rawPreview(unsavedDefinition, '');
+  check(emptyPreview.revision === null && emptyPreview.connection_count === 0, 'An empty pasted sample must stay in paste mode.');
+  const whitespaceDefinition = {...unsavedDefinition, rules:[{id:'spaces', regex:'^ (?P<remote_hostname>preview-external\\.example\\.test)\\t$', flags:['MULTILINE']}]};
+  const whitespacePreview = await rawPreview(whitespaceDefinition, ' preview-external.example.test\t');
+  check(whitespacePreview.connection_count === 1, 'Preview must preserve leading spaces and trailing tabs in sample text and regexes.');
+
+  await page.locator('#preview-mode').selectOption('repository');
+  await page.locator('#select2-preview-artifact-container').click();
+  await page.locator('.select2-results__option[aria-selected]').first().waitFor();
+  await page.locator('.select2-results__option[aria-selected]').first().click();
+  const repositoryResponse = page.waitForResponse(response => response.url().endsWith('/parsers/preview'));
+  await page.getByRole('button', {name:'Run preview', exact:true}).click();
+  check((await repositoryResponse).ok(), 'Repository artifact preview must succeed.');
+  await page.waitForFunction(() => document.querySelector('#run-parser-preview').disabled === false);
+  check(JSON.parse(await page.locator('#parser-preview-result').innerText()).revision, 'Repository preview must show its revision.');
+  await page.locator('[href="#parser-definition-panel"]').click();
+  await submit(page.getByRole('button', {name:'Save global parser', exact:true}));
+  check(await page.locator('#parser-id').getAttribute('readonly') !== null, 'Saved parser IDs must be stable.');
+  await page.screenshot({path:'/artifacts/parser-editor.png', fullPage:true});
+  await oxidizedSection('source');
+  check(!await page.locator('[name="parsers[]"][value="browser-neighbors"]').isChecked(), 'New custom parsers must stay disabled.');
+  await page.locator('[name="parsers[]"][value="browser-neighbors"]').check();
+  await submit(page.getByRole('button', {name:'Save parser selection', exact:true}));
+  await page.goto(catalogUrl + '&edit=browser-neighbors');
+  check(await page.getByRole('button', {name:'Delete unused parser', exact:true}).isDisabled(), 'Used custom parsers must show deletion dependencies.');
+  await page.getByRole('link', {name:'Edit underlying file in Advanced', exact:true}).click();
+  const file = page.locator('#file_content');
+  await file.fill((await file.inputValue()).replace('Browser neighbor format', 'Advanced neighbor format'));
+  await submit(page.getByRole('button', {name:'Validate and save libremapper.yaml', exact:true}));
+  await page.goto(catalogUrl + '&edit=browser-neighbors');
+  check(await page.locator('#parser-label').inputValue() === 'Advanced neighbor format', 'Advanced edits must reload in the catalog editor.');
+  const stalePage = await context.newPage(); await stalePage.goto(catalogUrl + '&edit=browser-neighbors');
+  await page.locator('#parser-label').fill('Updated neighbor format');
+  await submit(page.getByRole('button', {name:'Save global parser', exact:true}));
+  await stalePage.locator('#parser-label').fill('Stale overwrite');
+  await Promise.all([stalePage.waitForNavigation(), stalePage.getByRole('button', {name:'Save global parser', exact:true}).click()]);
+  check((await stalePage.locator('.alert-danger[role="alert"]').innerText()).includes('changed since it was loaded'), 'Stale catalog saves must be refused.');
+  await stalePage.close();
+  await page.goto(catalogUrl + '&edit=saos10-lldp-neighbors');
+  await page.locator('#parser-label').fill('Customized built-in');
+  await submit(page.getByRole('button', {name:'Save global parser', exact:true}));
+  page.once('dialog', dialog => dialog.accept());
+  await submit(page.getByRole('button', {name:'Reset to packaged definition', exact:true}));
+  check(await page.locator('#parser-label').inputValue() === 'Ciena SAOS 10 LLDP neighbors', 'Reset must restore packaged definitions.');
+  await oxidizedSection('source');
+  await page.locator('[name="parsers[]"][value="browser-neighbors"]').uncheck();
+  await lldpParser.check(); await nniParser.check();
+  await submit(page.getByRole('button', {name:'Save parser selection', exact:true}));
+  await page.goto(catalogUrl + '&edit=browser-neighbors');
+  page.once('dialog', dialog => dialog.accept());
+  await submit(page.getByRole('button', {name:'Delete unused parser', exact:true}));
+  check(await page.locator('#parser-catalog tr[data-parser-id="browser-neighbors"]').count() === 0, 'Unused custom parsers must be deletable.');
+  await review();
+  await tab('Devices', 'Matched devices');
+  await checkDeviceSorting();
+  await checkDeviceSelection();
+  const deviceRow = page.locator('#device-list tbody tr[data-in-scope="1"]').first();
+  const selectedDevice = await deviceRow.locator('input[name="device_id"]').inputValue();
+  const selectedHostname = await deviceRow.locator('td small').first().innerText();
+  await submit(deviceRow.getByRole('button', {name:'Exclude', exact:true}));
+  await review();
+  check(Number((await page.locator('#map-header').innerText()).match(/(\d+) devices/)[1]) === initialCount - 1, 'Individual exclusion must remove a regex match.');
+  await tab('Devices', 'Matched devices');
+  await submit(page.locator('#device-list tr', {has:page.locator(`input[value="${selectedDevice}"][name="device_id"]`)}).getByRole('button', {name:'Automatic', exact:true}));
+  await review();
+  await publish();
+  await tab('Links');
+  check(await page.locator('.connection-form').count() === 0, 'Connections must not initialize manual editors.');
+  const selectedConnection = await page.locator('#plan-links input[name="included_ids[]"]:checked').first().inputValue();
+  await page.locator(`#plan-links input[name="included_ids[]"][value="${selectedConnection}"]`).uncheck();
+  await submit(page.getByRole('button', {name:'Save connection selection', exact:true}));
+  await review();
+  await tab('Links');
+  check(!await page.locator(`#plan-links input[name="included_ids[]"][value="${selectedConnection}"]`).isChecked(), 'Excluded connection must remain available to re-include.');
+  await page.locator(`#plan-links input[name="included_ids[]"][value="${selectedConnection}"]`).check();
+  await submit(page.getByRole('button', {name:'Save connection selection', exact:true}));
+  await review();
+  await tab('Links');
+  await Promise.all([page.waitForNavigation(), page.getByRole('link', {name:'Traffic interface', exact:true}).first().click()]);
+  let graphForm = page.locator('#traffic-interface-editor');
+  await graphForm.locator('select:not([disabled])').waitFor();
+  const graphId = await graphForm.locator('[name="canonical_id"]').inputValue();
+  const alternatePort = await graphForm.locator('select option[value]:not([value=""])').last().getAttribute('value');
+  await graphForm.locator('select').selectOption(alternatePort);
+  await submit(graphForm.getByRole('button', {name:'Save traffic interface', exact:true}));
+  await tab('Review');
+  await publish();
+  await tab('Links');
+  check((await page.locator('#plan-links').innerText()).includes('Overridden'), 'Discovered graph override must resolve in Connections.');
+  await page.screenshot({path:'/artifacts/discovered-graph-swap.png', fullPage:true});
+  await tab('Review');
+  await page.getByText('Traffic interface choices', {exact:true}).click();
+  await submit(page.getByRole('button', {name:'Remove traffic choice', exact:true}).first());
+  await Promise.all([page.waitForNavigation(), page.locator('.workspace-subtabs').getByRole('link', {name:'Manual', exact:true}).click()]);
+  const initialManualCount = await page.locator('#manual-connections').getByRole('button', {name:'Remove from all maps', exact:true}).count();
+  await page.locator('[href="#manual-link-edit"]').click();
+  let form = page.locator('#connection-add');
+  check(await form.locator('.endpoint-all-interfaces').evaluateAll(inputs => inputs.every(input => input.checked)), 'All interfaces must be shown by default.');
+  const deviceValues = await form.locator('.endpoint-device').first().locator('option[value]:not([value=""])').evaluateAll(options => options.map(option => option.value));
+  const first = deviceValues[0], second = deviceValues[1];
+  const response = await page.request.get(`${base}/plugin/libremapper/devices/${first}/interfaces`);
+  check(response.ok(), 'Authenticated interface route failed.');
+  const ports = (await response.json()).interfaces;
+  const port = ports.find(port => port.usable) || ports.find(port => !port.deleted);
+  check(port, 'Fixture must expose a real interface.');
+  const firstInterfacesUrl = `${base}/plugin/libremapper/devices/${first}/interfaces`;
+  await page.route(firstInterfacesUrl, route => route.fulfill({json:{interfaces:[...ports, {port_id:99999999, text:'Deleted fixture port', usable:false, deleted:true}]}}));
+  await form.locator('[name="a_device_id"]').selectOption(first);
+  await form.locator('[name="b_device_id"]').selectOption(second);
+  await form.locator('[name="a_interface"]:not([disabled])').waitFor();
+  await form.locator('.endpoint-all-interfaces').first().check();
+  await form.locator('[name="a_interface"]').selectOption(String(port.port_id));
+  await form.locator('[name="b_interface"]:not([disabled])').waitFor();
+  check(await form.locator('[name="a_interface"] option[value="99999999"]').count() === 0, 'Show all must keep deleted ports out of selectable options.');
+  await page.unroute(firstInterfacesUrl);
+  await form.locator('[name="b_interface"]').selectOption('custom');
+  await form.locator('[name="b_label"]').fill(port.name);
+  await submit(form.getByRole('button', {name:'Add missing connection', exact:true}));
+  await page.getByRole('link', {name:'View manual records', exact:false}).click();
+  check(new URL(page.url()).hash === '#manual-connections', 'Manual records shortcut must navigate to the shared records.');
+  check(new URL(page.url()).pathname === '/plugin/settings/libremapper' && new URL(page.url()).searchParams.get('map') === 'operator-browser', 'Manual records shortcut must remain on the selected map despite the LibreNMS base URL.');
+  check(await page.locator('#manual-connections').getByRole('button', {name:'Remove from all maps', exact:true}).count() === initialManualCount + 1, 'New editable manual connection must appear in the records section.');
+  let manualRow = page.locator('#manual-connections tr').filter({has:page.locator('input[name="source_id"][value^="manual:"]')}).first();
+  const sourceId = await manualRow.locator('input[name="source_id"]').first().inputValue();
+  await Promise.all([page.waitForNavigation(), manualRow.getByText('Edit connection', {exact:true}).click()]);
+  form = page.locator('.connection-form');
+  check(await form.locator('.endpoint-all-interfaces').evaluateAll(inputs => inputs.every(input => input.checked)), 'Editing must also show all interfaces by default.');
+  check(await form.locator('[name="source_id"]').inputValue() === sourceId, 'Edit must retain manual source ID.');
+  await form.locator('[name="a_interface"]:not([disabled])').waitFor();
+  await form.locator('[name="b_interface"]:not([disabled])').waitFor();
+  await form.locator('[name="b_label"]').fill('Operator custom label');
+  await submit(form.getByRole('button', {name:'Save connection', exact:true}));
+  check(await page.locator(`input[name="source_id"][value="${sourceId}"]`).count() >= 1, 'Edited source ID changed.');
+  const missingPortUrl = `${base}/plugin/libremapper/devices/${first}/interfaces`;
+  await page.route(missingPortUrl, route => route.fulfill({json:{interfaces:[]}}));
+  await page.reload();
+  manualRow = page.locator('#manual-connections tr').filter({has:page.locator(`input[name="source_id"][value="${sourceId}"]`)});
+  await Promise.all([page.waitForNavigation(), manualRow.getByText('Edit connection', {exact:true}).click()]);
+  form = page.locator('.connection-form');
+  await form.getByText('The selected port is unavailable.', {exact:false}).waitFor();
+  check(await form.locator('[name="a_interface"]').inputValue() === 'file:librenms-port:' + port.port_id, 'A missing port must retain its explicit selection.');
+  check(await form.getByRole('button', {name:'Save connection', exact:true}).isDisabled(), 'Unavailable ports must block silent fallback saves.');
+  await form.locator('[name="a_interface"]').selectOption('');
+  await form.getByRole('button', {name:'Save connection', exact:true}).waitFor({state:'visible'});
+  await page.waitForFunction(() => [...document.querySelectorAll('.connection-form button')].some(button => button.textContent.trim() === 'Save connection' && !button.disabled));
+  await page.unroute(missingPortUrl);
+  await page.reload();
+  await page.locator('[href="#manual-link-records"]').click();
+
+  await submit(manualRow.getByRole('button', {name:'Hide in this map', exact:true}));
+  check(await manualRow.getByRole('button', {name:'Show in this map', exact:true}).count() === 1, 'Per-map hide must persist.');
+  await submit(manualRow.getByRole('button', {name:'Show in this map', exact:true}));
+  await manualRow.locator('input[name="source_ids[]"]').check();
+  await submit(page.getByRole('button', {name:'Remove selected connections from all maps', exact:true}));
+  check(await page.locator(`input[name="source_ids[]"][value="${sourceId}"]`).count() === 0, 'Selected connection must be removed.');
+  await review();
+  await tab('Devices');
+  await Promise.all([page.waitForNavigation(), page.locator('.workspace-subtabs').getByRole('link', {name:'Manual', exact:true}).click()]);
+  await page.locator('[href="#manual-device-edit"]').click();
+  await page.locator('#manual-hostname').fill('Browser external peer');
+  await page.locator('#manual-layer').fill('3');
+  await page.locator('#manual-parts').fill('1');
+  await submit(page.getByRole('button', {name:'Add manual device', exact:true}));
+  const externalRow = page.locator('#manual-devices tbody tr').filter({hasText:'Browser external peer'});
+  const externalId = await externalRow.locator('input[name="source_id"]').first().inputValue();
+  check((await externalRow.innerText()).includes('Explicitly included'), 'New external devices must seed the current map.');
+  await tab('Layout', 'Overrides');
+  const manualPlacementRow = page.locator('#device-list tr').filter({has:page.locator(`.placement-device[value="${externalId}"]`)});
+  check(await manualPlacementRow.isVisible() && (await manualPlacementRow.innerText()).includes('Shared default: 3'), 'An included manual device must appear in the layer controls before review.');
+  await page.locator('#device-search').fill('Browser external peer');
+  await page.locator('#placement-check-all').check();
+  check(await page.locator('#device-list .placement-device:checked').count() === 1
+    && await manualPlacementRow.locator('.placement-device').isChecked(), 'Layer check all must respect the search filter for manual devices.');
+  await page.locator('#device-layer').fill('-8');
+  await submit(page.getByRole('button', {name:'Apply layer to selected devices', exact:true}));
+  check((await manualPlacementRow.innerText()).includes('Layer -8'), 'Manual layer overrides must persist on the Layout tab.');
+  await review();
+  await tab('Layout', 'Overrides');
+  check(await manualPlacementRow.locator('td').nth(4).getAttribute('data-sort-value') !== '-8', 'Automatic layout must ignore manual device overrides.');
+  await subtab('Topology');
+  await page.locator('#layout_type').selectOption('top');
+  await page.locator('[name="layout_infer_layers"][type="checkbox"]').uncheck();
+  await submit(page.getByRole('button', {name:'Save layout', exact:true}));
+  await review();
+  await tab('Layout', 'Overrides');
+  check(await manualPlacementRow.locator('td').nth(4).getAttribute('data-sort-value') === '-8', 'Manual layered layouts must apply manual device overrides.');
+  await page.locator('#device-placement-form').scrollIntoViewIfNeeded();
+  await page.screenshot({path:'/artifacts/manual-device-layers.png', fullPage:true});
+  await manualPlacementRow.locator('.placement-device').check();
+  await page.locator('#device-layer').fill('');
+  await submit(page.getByRole('button', {name:'Apply layer to selected devices', exact:true}));
+  await review();
+  await tab('Layout', 'Overrides');
+  check(await manualPlacementRow.locator('td').nth(4).getAttribute('data-sort-value') === '3', 'Clearing a map layer must restore the shared manual default.');
+  await subtab('Topology');
+  await page.locator('#layout_type').selectOption('auto');
+  await page.locator('[name="layout_infer_layers"][type="checkbox"]').check();
+  await submit(page.getByRole('button', {name:'Save layout', exact:true}));
+  await tab('Devices');
+  await Promise.all([page.waitForNavigation(), page.locator('.workspace-subtabs').getByRole('link', {name:'Manual', exact:true}).click()]);
+  await Promise.all([page.waitForNavigation(), page.getByRole('link', {name:'Edit underlying file in Advanced', exact:true}).click()]);
+  const underlyingContent = await page.locator('#file_content').inputValue();
+  await page.locator('#file_content').fill(underlyingContent.replaceAll('Browser external peer', 'Browser external file peer'));
+  await submit(page.getByRole('button', {name:'Validate and save manual-topology.yaml', exact:true}));
+  check(new URL(page.url()).searchParams.get('map') === 'operator-browser', 'Advanced saves must preserve the selected map.');
+  await page.goto(`${base}/plugin/settings/libremapper?map=operator-browser&tab=devices&subtab=manual`);
+  const fileEditedRow = page.locator('#manual-devices tbody tr').filter({hasText:'Browser external file peer'});
+  check(await fileEditedRow.locator('input[name="source_id"]').first().inputValue() === externalId, 'Advanced edits must reload with the same manual identity.');
+  await Promise.all([page.waitForNavigation(), fileEditedRow.getByRole('link', {name:'Edit device', exact:true}).click()]);
+  await page.locator('#manual-hostname').fill('Browser external peer');
+  await submit(page.getByRole('button', {name:'Save manual device', exact:true}));
+  await page.locator('[href="#manual-device-edit"]').click();
+  const concurrent = await page.context().newPage();
+  await concurrent.goto(`${base}/plugin/settings/libremapper?map=operator-browser&tab=advanced&file=manual-topology.yaml`);
+  await concurrent.locator('#file_content').fill((await concurrent.locator('#file_content').inputValue()) + '\n# concurrent file edit\n');
+  await Promise.all([concurrent.waitForNavigation(), concurrent.getByRole('button', {name:'Validate and save manual-topology.yaml', exact:true}).click()]);
+  check(await concurrent.locator('.alert-danger[role="alert"]').count() === 0, 'Concurrent Advanced save must succeed.');
+  await concurrent.close();
+  await page.locator('#manual-hostname').fill('Stale rejected device');
+  await Promise.all([page.waitForNavigation(), page.getByRole('button', {name:'Add manual device', exact:true}).click()]);
+  check((await page.locator('.alert-danger[role="alert"]').innerText()).includes('File changed since it was loaded'), 'A stale shared file must reject the manual form.');
+  check(new URL(page.url()).searchParams.get('subtab') === 'manual', 'Validation failures must preserve the active manual subtab.');
+  await page.reload();
+
+  await tab('Links');
+  await Promise.all([page.waitForNavigation(), page.locator('.workspace-subtabs').getByRole('link', {name:'Manual', exact:true}).click()]);
+  await page.locator('[href="#manual-link-edit"]').click();
+  form = page.locator('#connection-add');
+  await form.locator('.endpoint-all-devices').first().check();
+  await form.locator('[name="a_device_id"]').selectOption(first);
+  await form.locator('[name="a_interface"]:not([disabled])').waitFor();
+  await form.locator('[name="a_interface"]').selectOption(String(port.port_id));
+  await form.locator('[name="b_device_id"]').selectOption('manual:' + externalId);
+  await submit(form.getByRole('button', {name:'Add missing connection', exact:true}));
+  check(await page.locator('.connection-form').count() === 1, 'The manual catalog must use one active editor.');
+  await review();
+  await publish();
+  await tab('Links');
+  const externalConnection = page.locator('#plan-links tbody tr').filter({hasText:'Browser external peer'});
+  check((await externalConnection.innerText()).includes('Automatic') && (await externalConnection.innerText()).includes(port.name), 'A manual connection with one external endpoint must resolve real counters.');
+  await page.screenshot({path:'/artifacts/manual-external-graph.png', fullPage:true});
+  await tab('Devices');
+  await Promise.all([page.waitForNavigation(), page.locator('.workspace-subtabs').getByRole('link', {name:'Manual', exact:true}).click()]);
+  await Promise.all([page.waitForNavigation(), page.locator('#manual-devices tbody tr').filter({hasText:'Browser external peer'}).getByRole('button', {name:'Delete device from all maps', exact:true}).click()]);
+  check((await page.locator('.alert-danger[role="alert"]').innerText()).includes('referenced by links'), 'Referenced device deletion must list dependencies.');
+  await tab('Links');
+  await Promise.all([page.waitForNavigation(), page.locator('.workspace-subtabs').getByRole('link', {name:'Manual', exact:true}).click()]);
+  await submit(page.locator('#manual-connections tr').filter({hasText:'Browser external peer'}).getByRole('button', {name:'Remove from all maps', exact:true}));
+  await tab('Devices');
+  await Promise.all([page.waitForNavigation(), page.locator('.workspace-subtabs').getByRole('link', {name:'Manual', exact:true}).click()]);
+  await page.locator('#manual-devices tbody tr').filter({hasText:'Browser external peer'}).locator('input[name="source_ids[]"]').check();
+  await submit(page.getByRole('button', {name:'Delete selected devices from all maps', exact:true}));
+  check(await page.locator('#manual-devices tbody tr').filter({hasText:'Browser external peer'}).count() === 0, 'Selected device must be removed.');
+  await review();
+  await tab('Layout', 'Overrides');
+  await checkDeviceSorting();
+  await checkDeviceSelection();
+  await checkDeviceSelection('placement');
+  await require('./workspace.cjs')(page);
+  await subtab('Topology');
+  check(await page.locator('#layout_type').inputValue() === 'auto', 'New maps must use automatic layout.');
+  check(await page.locator('[name="layout_infer_layers"][type="checkbox"]').isChecked(), 'New maps must infer hierarchy.');
+  check(await page.locator('#short_hostname_parts').inputValue() === '2', 'Short hostnames must default to two components from the left.');
+  await page.locator('#node_label').selectOption('short_hostname');
+  await page.locator('#short_hostname_parts').fill('3');
+  await submit(page.getByRole('button', {name:'Save layout', exact:true}));
+  check(await page.locator('#short_hostname_parts').inputValue() === '3', 'Hostname component setting must persist.');
+  await review();
+  check(await page.locator(`#topology-preview g[data-device-id="${selectedDevice}"] .preview-label`).textContent() === selectedHostname.split('.').slice(0, 3).join('.'), 'Preview must show the configured first three hostname components.');
+  await tab('Layout', 'Overrides');
+  let labelRow = page.locator(`#device-list tr[data-device-id="${selectedDevice}"]`);
+  const secondLabelRow = page.locator(`#device-list tr[data-in-scope="1"]:not([data-device-id="${selectedDevice}"])`).first();
+  const secondLabelDevice = await secondLabelRow.getAttribute('data-device-id');
+  const secondLabelHostname = await secondLabelRow.locator('td small').innerText();
+  await labelRow.locator('.hostname-device').check();
+  await secondLabelRow.locator('.hostname-device').check();
+  await page.locator('#hostname-parts').fill('2');
+  await page.screenshot({path:'/artifacts/hostname-bulk-selection.png', fullPage:true});
+  await submit(page.getByRole('button', {name:'Apply to selected devices', exact:true}));
+  check(new URL(page.url()).searchParams.get('tab') === 'layout'
+    && await page.locator(`#device-list tr[data-device-id="${secondLabelDevice}"]`).innerText().then(text => text.includes('2 components')), 'Bulk label saves must preserve the map tab and display the saved override.');
+  await review();
+  check(await page.locator(`#topology-preview g[data-device-id="${selectedDevice}"] .preview-label`).textContent() === selectedHostname.split('.').slice(0, 2).join('.'), 'Device override must take priority over the map hostname default.');
+  check(await page.locator(`#topology-preview g[data-device-id="${secondLabelDevice}"] .preview-label`).textContent() === secondLabelHostname.split('.').slice(0, 2).join('.'), 'The shared field must update every selected device.');
+  await tab('Layout', 'Overrides');
+  labelRow = page.locator(`#device-list tr[data-device-id="${selectedDevice}"]`);
+  await labelRow.locator('.hostname-device').check();
+  await page.locator('#hostname-parts').fill('');
+  await submit(page.getByRole('button', {name:'Apply to selected devices', exact:true}));
+  check((await page.locator(`#device-list tr[data-device-id="${secondLabelDevice}"]`).innerText()).includes('2 components'), 'Clearing an override must preserve unselected devices.');
+  await review();
+  check(await page.locator(`#topology-preview g[data-device-id="${selectedDevice}"] .preview-label`).textContent() === selectedHostname.split('.').slice(0, 3).join('.'), 'Clearing an override must restore the map default.');
+  await tab('Layout', 'Overrides');
+  await page.locator(`#device-list tr[data-device-id="${secondLabelDevice}"] .hostname-device`).check();
+  await submit(page.getByRole('button', {name:'Apply to selected devices', exact:true}));
+  await review();
+  await tab('Layout');
+  check(await page.locator('.preview-tier').count() === initialCount, 'Every mapped device must show its placement tier.');
+  await page.locator('#preview-tiers').uncheck();
+  check(await page.locator('.preview-tier:visible').count() === 0 && await page.locator('.preview-label:visible').count() === initialCount, 'Tier toggle must not hide device labels.');
+  await page.locator('#preview-tiers').check();
+  await page.locator('#topology-preview').screenshot({path:'/artifacts/operator-tiers.png'});
+  await page.locator('#preview-zoom').fill('150');
+  await page.locator('#preview-labels').uncheck();
+  await page.locator('#preview-labels').check();
+  await page.screenshot({path:'/artifacts/operator-automatic.png', fullPage:true});
+  await subtab('Overrides');
+  const layerCell = id => page.locator(`#device-list tr[data-device-id="${id}"] td`).nth(4);
+  const inferredLayer = await layerCell(selectedDevice).getAttribute('data-sort-value');
+  await page.locator(`#device-list tr[data-device-id="${selectedDevice}"] .placement-device`).check();
+  await page.locator(`#device-list tr[data-device-id="${secondLabelDevice}"] .placement-device`).check();
+  await page.locator('#device-layer').fill('1.5');
+  await page.locator('#device-placement-form').evaluate(form => { form.noValidate = true; });
+  const [invalidLayerRequest, invalidLayerResponse] = await Promise.all([
+    page.waitForRequest(request => request.isNavigationRequest() && request.method() === 'POST'),
+    page.waitForNavigation(),
+    page.getByRole('button', {name:'Apply layer to selected devices', exact:true}).click(),
+  ]);
+  const postedLayer = new URLSearchParams(invalidLayerRequest.postData() || '').get('placement');
+  check(postedLayer === '1.5', 'Invalid layer test must submit the decimal value; got ' + postedLayer);
+  await page.locator('.alert-danger[role="alert"]').waitFor({state:'visible'});
+  const layerErrors = await page.locator('.alert-danger[role="alert"]').allTextContents();
+  check(layerErrors.some(message => message.includes('blank or a whole number'))
+    && new URL(page.url()).searchParams.get('tab') === 'layout'
+    && await page.locator('#device-list .placement-device:checked').count() === 2
+    && await page.locator('#device-layer').inputValue() === '1.5', 'Rejected layer response: ' + JSON.stringify({
+      url:page.url(), status:invalidLayerResponse.status(), errors:layerErrors,
+      serverError:(await invalidLayerResponse.text()).includes('Layer value must be blank or a whole number.'),
+      notices:await page.locator('.alert').allTextContents(),
+    }));
+  await page.locator('#device-layer').fill('-4');
+  await page.screenshot({path:'/artifacts/layer-bulk-selection.png', fullPage:true});
+  await submit(page.getByRole('button', {name:'Apply layer to selected devices', exact:true}));
+  check(new URL(page.url()).searchParams.get('tab') === 'layout'
+    && (await page.locator(`#device-list tr[data-device-id="${secondLabelDevice}"] td`).last().innerText()).includes('Layer -4'), 'Bulk layers must persist for both devices and keep the Layout tab selected.');
+  await review();
+  await tab('Layout', 'Overrides');
+  check(await layerCell(selectedDevice).getAttribute('data-sort-value') === inferredLayer, 'Automatic layout must ignore saved individual layers.');
+  await subtab('Topology');
+  await page.locator('#layout_type').selectOption('top');
+  await page.locator('[name="layout_infer_layers"][type="checkbox"]').uncheck();
+  await submit(page.getByRole('button', {name:'Save layout', exact:true}));
+  await review();
+  await tab('Layout', 'Overrides');
+  check(await layerCell(selectedDevice).getAttribute('data-sort-value') === '-4'
+    && await layerCell(secondLabelDevice).getAttribute('data-sort-value') === '-4', 'A manual layout must restore the saved individual layers.');
+  await page.locator(`#device-list tr[data-device-id="${selectedDevice}"] .placement-device`).check();
+  await page.locator('#device-layer').fill('');
+  await submit(page.getByRole('button', {name:'Apply layer to selected devices', exact:true}));
+  check((await page.locator(`#device-list tr[data-device-id="${secondLabelDevice}"] td`).last().innerText()).includes('Layer -4'), 'Clearing one layer must retain the unselected device override.');
+  await review();
+  await tab('Layout', 'Overrides');
+  check(await layerCell(selectedDevice).getAttribute('data-sort-value') === '7', 'Clearing an individual layer must restore its scope layer.');
+  const placementText = await page.locator(`#device-list tr[data-device-id="${selectedDevice}"] td`).nth(4).innerText();
+  await subtab('Topology');
+  check(await page.locator(`#topology-preview g[data-device-id="${selectedDevice}"] .preview-tier`).textContent() === placementText, 'Map tier annotation must match the corrected Placement column.');
+  await tab('Review');
+  await publish();
+
+  // Exercise the Advanced escape hatch and verify a customized legacy layout is unchanged.
+  await page.goto(`${base}/plugin/settings/libremapper?tab=files&map=operator-browser&file=__new__`);
+  check(new URL(page.url()).searchParams.get('tab') === 'advanced', 'Legacy Files bookmark must redirect.');
+  await page.locator('#new_path').fill('maps/generated-core-browser.yaml');
+  await page.locator('#new_content').fill(fs.readFileSync('/tests/browser-map.yaml', 'utf8'));
+  await submit(page.getByRole('button', {name:'Validate and create file', exact:true}));
+  await page.goto(`${base}/plugin/settings/libremapper?map=generated-core-browser&tab=devices`);
+  await review();
+  check((await page.locator('#map-header').innerText()).includes('26 devices · 31 links'), 'Legacy Core Replica topology totals changed.');
+  await page.screenshot({path:'/artifacts/core-replica-legacy.png', fullPage:true});
+  await tab('Layout');
+  await page.locator('#layout_type').selectOption('auto');
+  await page.locator('input[name="layout_infer_layers"][type="checkbox"]').check();
+  await submit(page.getByRole('button', {name:'Save layout', exact:true}));
+  await review();
+  check((await page.locator('#map-header').innerText()).includes('26 devices · 31 links'), 'Automatic must preserve Core Replica membership.');
+  await page.screenshot({path:'/artifacts/core-replica-automatic.png', fullPage:true});
+  await tab('Layout');
+  await page.locator('#layout_type').selectOption('top');
+  await page.locator('input[name="layout_infer_layers"][type="checkbox"]').uncheck();
+  await submit(page.getByRole('button', {name:'Save layout', exact:true}));
+  await review();
+  await publish();
+  await tab('Advanced');
+  const selectorsBeforeRetry = await page.locator('#selectors_yaml').inputValue();
+  await page.locator('#menu_group').fill('Browser retry preserved');
+  await page.locator('#selectors_yaml').fill('not: [valid');
+  await Promise.all([page.waitForNavigation(), page.getByRole('button', {name:'Save configuration', exact:true}).click()]);
+  await page.locator('.alert-danger[role="alert"]').waitFor();
+  check(await page.locator('#menu_group').inputValue() === 'Browser retry preserved', 'Rejected Advanced changes must stay available for correction.');
+  await page.locator('#selectors_yaml').fill(selectorsBeforeRetry);
+  await submit(page.getByRole('button', {name:'Save configuration', exact:true}));
+  check(await page.locator('#menu_group').inputValue() === 'Browser retry preserved', 'Correcting one field must preserve other pending Advanced edits.');
+  await review();
+  await publish();
+  await tab('Advanced');
+  await page.locator('input[name="scheduled"][type="checkbox"]').check();
+  await submit(page.getByRole('button', {name:'Save configuration', exact:true}));
+  await review();
+  await publish();
+  check((await page.locator('#map-header').innerText()).includes('Published · current'), 'Scheduling must preserve existing map behavior.');
+  await tab('Advanced', 'Agent access');
+  const agentPanel = page.locator('#agent-access');
+  check(!(await agentPanel.locator('input[name="mcp_enabled"][type="checkbox"]').isChecked()), 'MCP must remain disabled by default.');
+  const skillResponse = await context.request.get(await agentPanel.getByRole('link', {name:'Download the Libremapper agent skill'}).getAttribute('href'));
+  check(skillResponse.ok() && (await skillResponse.text()).includes('name: libremapper'), 'The bundled skill must download through the authenticated UI.');
+  await page.goto(`${base}/api-access`);
+  let csrf = await page.locator('input[name="_token"]').first().inputValue();
+  const tokenResponse = await context.request.post(`${base}/api-access`, {form:{_token:csrf, description:'Browser MCP profile'}});
+  check(tokenResponse.ok(), 'Native API token creation must remain available.');
+  await page.goto(`${base}/plugin/settings/libremapper?map=generated-core-browser&tab=advanced&subtab=agent-access`);
+  const tokenForm = page.locator('#agent-access form').filter({hasText:'Browser MCP profile'});
+  const tokenId = await tokenForm.locator('input[name="token_id"]').inputValue();
+  await tokenForm.locator('select[name="profile"]').selectOption('edit');
+  await submit(tokenForm.getByRole('button', {name:'Save token profile'}));
+  check(await page.locator('#agent-access form').filter({hasText:'Browser MCP profile'}).locator('select[name="profile"]').inputValue() === 'edit', 'Token profiles must survive the save redirect.');
+  await page.locator('#agent-access input[name="mcp_enabled"][type="checkbox"]').check();
+  await submit(page.getByRole('button', {name:'Save agent access', exact:true}));
+  check(await page.locator('#agent-access input[name="mcp_enabled"][type="checkbox"]').isChecked(), 'MCP enablement must persist.');
+  await page.locator('#agent-access input[name="mcp_enabled"][type="checkbox"]').uncheck();
+  await submit(page.getByRole('button', {name:'Save agent access', exact:true}));
+  csrf = await page.locator('input[name="_token"]').first().inputValue();
+  check((await context.request.post(`${base}/api-access/${tokenId}`, {form:{_token:csrf, _method:'DELETE'}})).ok(), 'Native token revocation must remain available.');
+  await page.goto(`${base}/plugin/settings/libremapper?map=generated-core-browser&tab=advanced&subtab=agent-access`);
+  await page.locator('#agent-access').screenshot({path:'/artifacts/mcp-agent-access.png'});
+  await require('./ui-layout.cjs')(page, base);
+  check(errors.length === 0, `Browser errors: ${errors.join('; ')}`);
+  await browser.close();
+  process.stdout.write('Browser plugin flow passed.\n');
+})().catch(error => { process.stderr.write(`${error.stack}\n`); process.exit(1); });

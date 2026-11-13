@@ -1,0 +1,20 @@
++--------------------+-----------------------------------------+
+| interface          | 26
+| chassis-id         | 02:ff:02:00:00:01
+| port-id            | 50
+| system-name        | core04.site02.example.test
+| management-address | 192.0.2.13
+
++--------------------+-----------------------------------------+
+| interface          | 50
+| chassis-id         | 02:ff:02:00:00:02
+| port-id            | 26
+| system-name        | core04.site02.example.test
+| management-address | 192.0.2.13
+
++--------------------+-----------------------------------------+
+| interface          | 2/1
+| chassis-id         | 02:ff:02:00:00:03
+| port-id            | 2/7
+| system-name        | core01.site01.example.test
+| management-address | 192.0.2.5

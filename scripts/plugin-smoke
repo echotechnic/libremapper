@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DEV_DIR="${ROOT}/.realdata-dev"
+PROJECT="libremapper-realdata-dev"
+COMPOSE=(
+  docker compose
+  --project-name "${PROJECT}"
+  --env-file "${DEV_DIR}/.env"
+  --env-file "${DEV_DIR}/image.env"
+  --file "${ROOT}/dev/compose.yaml"
+)
+DEPS_DIR="$(mktemp -d)"
+trap 'rm -rf "${DEPS_DIR}"' EXIT
+
+"${ROOT}/scripts/dev-stack" reset
+"${COMPOSE[@]}" exec -T --user librenms librenms php /opt/libremapper/package/plugin/tests/settings-compat.php
+"${COMPOSE[@]}" exec -T --user librenms librenms php /opt/libremapper/package/plugin/tests/workspace-performance.php
+"${COMPOSE[@]}" exec -T --user librenms librenms php /opt/libremapper/package/plugin/tests/workspace-cache.php
+
+php_output="$("${COMPOSE[@]}" exec -T --user librenms librenms \
+  php /opt/libremapper/package/plugin/tests/run.php)"
+printf '%s\n' "${php_output}"
+grep -q '^PHP plugin checks passed\.$' <<<"${php_output}"
+"${COMPOSE[@]}" exec -T --user librenms librenms php /opt/libremapper/package/plugin/tests/mcp.php
+"${COMPOSE[@]}" exec -T --user root libremapper python <"${ROOT}/plugin/tests/seed-oxidized.py"
+
+mkdir -p "${DEV_DIR}/browser-artifacts"
+cp "${ROOT}/plugin/tests/package.json" "${DEPS_DIR}/package.json"
+docker run --rm \
+  --user "$(id -u):$(id -g)" \
+  -e PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
+  -e npm_config_cache=/tmp/npm-cache \
+  -v "${DEPS_DIR}:/deps" \
+  -w /deps \
+  mcr.microsoft.com/playwright:v1.55.1-noble \
+  npm install --ignore-scripts
+docker run --rm \
+  --shm-size=512m \
+  --network "${PROJECT}_web" \
+  --env-file "${DEV_DIR}/.env" \
+  -e LIBRENMS_URL=http://librenms:8000 \
+  -e NODE_PATH=/deps/node_modules \
+  -v "${DEPS_DIR}/node_modules:/deps/node_modules:ro" \
+  -v "${ROOT}/plugin/tests:/tests:ro" \
+  -v "${DEV_DIR}/browser-artifacts:/artifacts" \
+  -v "${ROOT}/tests/fixtures/synthetic-core:/fixtures:ro" \
+  mcr.microsoft.com/playwright:v1.55.1-noble \
+  node /tests/browser.cjs
+
+"${COMPOSE[@]}" exec -T --user librenms librenms sh -c \
+  'test -w /config; test -w /data/libremapper; test -f /config/libremapper.yaml; test ! -e vendor/echotechnic/libremapper/.realdata-dev; test ! -e vendor/echotechnic/libremapper/.git; php artisan route:list --path=plugin/libremapper --json | grep -q "libremapper.apply"; ! php artisan list --raw | grep -q "^libremapper:reconcile"'
+
+librenms_id="$(${COMPOSE[@]} ps -q librenms)"
+sidecar_id="$(${COMPOSE[@]} ps -q libremapper)"
+expected_image="$(docker image inspect "$(sed -nE 's/^LIBRENMS_IMAGE=(.*)/\1/p' "${DEV_DIR}/image.env")" --format '{{.Id}}')"
+actual_image="$(docker inspect "${librenms_id}" --format '{{.Image}}')"
+[[ "${actual_image}" == "${expected_image}" ]]
+[[ "$(docker inspect "${sidecar_id}" --format '{{.HostConfig.NetworkMode}}')" == "container:${librenms_id}" ]]
+[[ -z "$(docker port "${sidecar_id}")" ]]
+"${COMPOSE[@]}" exec -T librenms curl -fsS http://127.0.0.1:8001/health >/dev/null
+"${COMPOSE[@]}" exec -T libremapper sh -c \
+  'test -f /usr/share/libremapper-plugin/composer.json; test -f /usr/local/share/libremapper/install-or-update; test -f /usr/local/share/libremapper/compose.libremapper.yaml'
+docker cp "${sidecar_id}:/usr/share/libremapper-plugin" "${DEPS_DIR}/bundled-plugin"
+docker cp "${DEPS_DIR}/bundled-plugin" "${librenms_id}:/opt/librenms/libremapper-package"
+"${COMPOSE[@]}" exec -T --user librenms librenms composer config repositories.libremapper \
+  '{"type":"path","url":"/opt/librenms/libremapper-package","options":{"symlink":false,"versions":{"echotechnic/libremapper":"0.1.0"}}}'
+"${COMPOSE[@]}" exec -T --user librenms librenms lnms plugin:add echotechnic/libremapper 0.1.0
+installed_package="$("${COMPOSE[@]}" exec -T --user librenms librenms \
+  composer show echotechnic/libremapper --format=json)"
+grep -Fq -e '"0.1.0"' -e '"v0.1.0"' <<<"${installed_package}"
+
+"${ROOT}/scripts/dev-run" validate
+scheduled="$(${ROOT}/scripts/dev-run reconcile generated-core-browser)"
+grep -q "generated-core-browser reconciled (0 change(s))" <<<"${scheduled}"
+noop="$(${ROOT}/scripts/dev-run plan generated-core-browser)"
+grep -q "0 change(s), 0 warning(s), 0 conflict(s)" <<<"${noop}"
+
+counts="$(${COMPOSE[@]} exec -T db sh -c \
+  'mariadb -u "$MARIADB_USER" -p"$MARIADB_PASSWORD" "$MARIADB_DATABASE" -N -e "SELECT COUNT(*), (SELECT COUNT(*) FROM custom_map_edges e WHERE e.custom_map_id=m.custom_map_id) FROM custom_map_nodes n JOIN custom_maps m ON m.custom_map_id=n.custom_map_id WHERE m.name='\''Generated Core Browser'\''"')"
+[[ "${counts}" == $'26\t31' ]]
+
+printf 'Sidecar smoke passed: stock LibreNMS stayed intact, bundled plugin/API loaded, external reconcile was a no-op, and the map has 26 nodes/31 edges.\n'

@@ -1,0 +1,33 @@
+services:
+  librenms:
+    environment:
+      LIBREMAPPER_API_URL: http://127.0.0.1:8001
+    volumes:
+      - libremapper-config:/config
+      - libremapper-data:/data/libremapper
+
+  libremapper:
+    image: ghcr.io/echotechnic/libremapper:${LIBREMAPPER_VERSION:-0.1.0}
+    network_mode: service:librenms
+    environment:
+      DB_HOST: ${DB_HOST:-db}
+      DB_PORT: ${DB_PORT:-3306}
+      DB_NAME: ${DB_NAME:-librenms}
+      DB_USER: ${DB_USER:-librenms}
+      DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+      LIBREMAPPER_API_TOKEN: ${LIBREMAPPER_API_TOKEN:?Set LIBREMAPPER_API_TOKEN in .env}
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+    volumes:
+      - libremapper-config:/config
+      - libremapper-data:/data/libremapper
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+volumes:
+  libremapper-config:
+  libremapper-data:

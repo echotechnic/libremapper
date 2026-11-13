@@ -1,0 +1,40 @@
+key: generated-core-browser
+name: Generated Core Browser
+example: true
+menu_group: Libremapper Test
+scheduled: false
+width: "1600"
+height: "800"
+edge_separation: 24
+node_label: short_hostname
+sources:
+  - provider: native
+    selectors:
+      - {type: group, value: Reference Aggregation, layer: -10}
+      - {type: group, value: Reference Core, layer: 0}
+      - {type: group, value: Reference POP, layer: 10}
+      - {type: group, value: Reference Customer, layer: 20}
+    protocols: [lldp, cdp, ip-p2p, mac, bgp, ospf]
+  - provider: artifacts
+    selectors:
+      - {type: group, value: Reference Aggregation, layer: -10}
+      - {type: group, value: Reference Core, layer: 0}
+      - {type: group, value: Reference POP, layer: 10}
+      - {type: group, value: Reference Customer, layer: 20}
+layout:
+  type: top
+  width: 1600
+  height: 800
+  margin: 60
+  layer_spacing: 180
+  node_spacing: 120
+  auto_grow: false
+  center_layer: 0
+  separation: constrained
+node_defaults:
+  style: image
+  image: router.svg
+edge_defaults:
+  style: cubicBezier
+  showpct: false
+  showbps: true

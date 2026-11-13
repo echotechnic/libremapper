@@ -1,0 +1,141 @@
+version: 1
+
+devices:
+  - source_id: d1001
+    hostname: border02.site02.example.test
+    attributes: {map_image: firewall.svg}
+    interfaces:
+      - {source_id: mgmt, device_source_id: d1001, name: MgmtEth0/RP0/CPU0/0}
+      - {source_id: bundle1, device_source_id: d1001, name: Bundle-Ether1}
+      - {source_id: bundle2, device_source_id: d1001, name: Bundle-Ether2}
+  - source_id: d1002
+    hostname: border01.site01.example.test
+    attributes: {map_image: firewall.svg}
+    interfaces:
+      - {source_id: mgmt, device_source_id: d1002, name: MgmtEth0/RP0/CPU0/0}
+      - {source_id: bundle1, device_source_id: d1002, name: Bundle-Ether1}
+      - {source_id: bundle2, device_source_id: d1002, name: Bundle-Ether2}
+  - {source_id: d1005, hostname: core01.site01.example.test, attributes: {map_image: router.svg}}
+  - source_id: d1006
+    hostname: core02.site02.example.test
+    attributes: {map_image: router.svg}
+    interfaces:
+      - {source_id: 2-2, device_source_id: d1006, name: 2/2}
+  - {source_id: d1007, hostname: pop01.site03.example.test, attributes: {map_image: switch-l3.svg}}
+  - {source_id: d1010, hostname: pop02.site04.example.test, attributes: {map_image: switch-l3.svg}}
+  - {source_id: d1014, hostname: cust10.site03.example.test, attributes: {map_image: router-square.svg}}
+  - {source_id: d1019, hostname: cust04.site01.example.test, attributes: {map_image: router-square.svg}}
+  - {source_id: d1042, hostname: cust13.site04.example.test, attributes: {map_image: router-square.svg}}
+  - source_id: d1015
+    hostname: cust01.site01.example.test
+    attributes: {map_image: router-square.svg}
+    interfaces:
+      - {source_id: ae1, device_source_id: d1015, name: ae1}
+  - source_id: d1016
+    hostname: cust02.site01.example.test
+    attributes: {map_image: router-square.svg}
+    interfaces:
+      - {source_id: ae1, device_source_id: d1016, name: ae1}
+  - source_id: d1017
+    hostname: cust03.site01.example.test
+    attributes: {map_image: router-square.svg}
+    interfaces:
+      - {source_id: ae1, device_source_id: d1017, name: ae1}
+  - source_id: d1018
+    hostname: cust11.site02.example.test
+    attributes: {map_image: router-square.svg}
+    interfaces:
+      - {source_id: ae1, device_source_id: d1018, name: ae1}
+  - source_id: d1033
+    hostname: cust05.site01.example.test
+    attributes: {map_image: router-square.svg}
+    interfaces:
+      - {source_id: ae1, device_source_id: d1033, name: ae1}
+  - source_id: d1034
+    hostname: cust06.site01.example.test
+    attributes: {map_image: router-square.svg}
+    interfaces:
+      - {source_id: ae101, device_source_id: d1034, name: ae101}
+  - source_id: d1039
+    hostname: cust07.site01.example.test
+    attributes: {map_image: router-square.svg}
+    interfaces:
+      - {source_id: ae1, device_source_id: d1039, name: ae1}
+  - source_id: d1040
+    hostname: cust08.site01.example.test
+    attributes: {map_image: router-square.svg}
+    interfaces:
+      - {source_id: ae1, device_source_id: d1040, name: ae1}
+  - source_id: d1041
+    hostname: cust09.site02.example.test
+    attributes: {map_image: router-square.svg}
+    interfaces:
+      - {source_id: ae1, device_source_id: d1041, name: ae1}
+  - {source_id: d1043, hostname: cust12.site02.example.test, attributes: {map_image: router-square.svg}}
+  - source_id: d1020
+    hostname: oob01.site01.example.test
+    attributes: {map_image: switch-l2.svg}
+    interfaces:
+      - {source_id: sw0p20, device_source_id: d1020, name: sw0p20}
+      - {source_id: wwan0, device_source_id: d1020, name: wwan0}
+  - source_id: d1023
+    hostname: oob02.site02.example.test
+    attributes: {map_image: switch-l2.svg}
+    interfaces:
+      - {source_id: br1, device_source_id: d1023, name: br1}
+      - {source_id: wwan0, device_source_id: d1023, name: wwan0}
+  - source_id: d1024
+    hostname: oob03.site03.example.test
+    attributes: {map_image: switch-l2.svg}
+    interfaces:
+      - {source_id: br1, device_source_id: d1024, name: br1}
+      - {source_id: wwan0, device_source_id: d1024, name: wwan0}
+  - source_id: d1021
+    hostname: oob04.site04.example.test
+    attributes: {map_image: switch-l2.svg}
+    interfaces:
+      - {source_id: br1, device_source_id: d1021, name: br1}
+      - {source_id: wwan0, device_source_id: d1021, name: wwan0}
+  - {source_id: transit01, hostname: Transit 01, layer: -20, attributes: {map_image: gtm.svg}}
+  - {source_id: transit02, hostname: Transit 02, layer: -20, attributes: {map_image: gtm.svg}}
+  - {source_id: oob-provider01, hostname: OOB Provider 01, layer: -20, attributes: {map_image: gtm.svg}}
+
+suppress_links:
+  # The first two pairs replace known physical LAG members with Bundle-Ether2.
+  # The remaining pairs replace or remove known fixture discoveries explicitly.
+  - {a: {device: d1002}, b: {device: d1005}}
+  - {a: {device: d1001}, b: {device: d1006}}
+  - {a: {device: d1001}, b: {device: d1023}}
+  - {a: {device: d1006}, b: {device: d1018}}
+  - {a: {device: d1007}, b: {device: d1021}}
+
+links:
+  # Data plane.
+  - {source_id: core-border-01, a: {device: d1005}, b: {device: d1002, interface: bundle2}, relationship_kind: direct}
+  - {source_id: core-border-02, a: {device: d1006}, b: {device: d1001, interface: bundle2}, relationship_kind: direct}
+  - {source_id: missing-02, a: {device: d1005}, b: {device: d1006, interface: 2-2}, relationship_kind: direct}
+  - {source_id: missing-05, a: {device: d1005}, b: {device: d1034, interface: ae101}, relationship_kind: direct}
+  - {source_id: missing-06, a: {device: d1006}, b: {device: d1041, interface: ae1}, relationship_kind: direct}
+  - {source_id: missing-07, a: {device: d1005}, b: {device: d1039, interface: ae1}, relationship_kind: direct}
+  - {source_id: missing-08, a: {device: d1005}, b: {device: d1017, interface: ae1}, relationship_kind: direct}
+  - {source_id: missing-09, a: {device: d1005}, b: {device: d1040, interface: ae1}, relationship_kind: direct}
+  - {source_id: missing-10, a: {device: d1005}, b: {device: d1015, interface: ae1}, relationship_kind: direct}
+  - {source_id: missing-11, a: {device: d1005}, b: {device: d1033, interface: ae1}, relationship_kind: direct}
+  - {source_id: missing-12, a: {device: d1005}, b: {device: d1016, interface: ae1}, relationship_kind: direct}
+  - {source_id: replacement-04, a: {device: d1006}, b: {device: d1018, interface: ae1}, relationship_kind: direct}
+  - {source_id: transit-01, a: {device: d1002, interface: bundle1}, b: {device: transit01}, relationship_kind: direct}
+  - {source_id: transit-02, a: {device: d1001, interface: bundle1}, b: {device: transit02}, relationship_kind: direct}
+
+  # One same-site infrastructure management link per border, core, and POP.
+  - {source_id: management-core-01, a: {device: d1005}, b: {device: d1020, interface: sw0p20}, relationship_kind: direct}
+  - {source_id: management-core-02, a: {device: d1006}, b: {device: d1023, interface: br1}, relationship_kind: direct}
+  - {source_id: management-border-02, a: {device: d1001, interface: mgmt}, b: {device: d1023}, relationship_kind: direct}
+  - {source_id: management-pop-01, a: {device: d1007}, b: {device: d1024, interface: br1}, relationship_kind: direct}
+  - {source_id: management-pop-02, a: {device: d1010}, b: {device: d1021, interface: br1}, relationship_kind: direct}
+
+  # The border01--OOB01 management link is discovered automatically.
+  # Every OOB device reaches the single provider.
+  - {source_id: oob-provider-01, a: {device: d1020, interface: wwan0}, b: {device: oob-provider01}, relationship_kind: direct}
+  - {source_id: oob-provider-02, a: {device: d1023, interface: wwan0}, b: {device: oob-provider01}, relationship_kind: direct}
+  - {source_id: oob-provider-03, a: {device: d1024, interface: wwan0}, b: {device: oob-provider01}, relationship_kind: direct}
+  - {source_id: oob-provider-04, a: {device: d1021, interface: wwan0}, b: {device: oob-provider01}, relationship_kind: direct}

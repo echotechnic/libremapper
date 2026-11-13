@@ -1,0 +1,41 @@
++--------------------+-----------------------------------------+
+| interface          | 11
+| chassis-id         | 02:ff:05:00:00:01
+| port-id            | 1
+| system-name        | external02.site00.example.test
+| management-address | 198.51.100.51
+
++--------------------+-----------------------------------------+
+| interface          | 12
+| chassis-id         | 02:ff:05:00:00:02
+| port-id            | 2
+| system-name        | external02.site00.example.test
+| management-address | 198.51.100.52
+
++--------------------+-----------------------------------------+
+| interface          | 13
+| chassis-id         | 02:ff:05:00:00:03
+| port-id            | sfp28-11
+| system-name        | cust12.site02.example.test
+| management-address | 192.0.2.43
+
++--------------------+-----------------------------------------+
+| interface          | 2/1
+| chassis-id         | 02:ff:05:00:00:04
+| port-id            | 2/1
+| system-name        | pop02.site04.example.test
+| management-address | 192.0.2.10
+
++--------------------+-----------------------------------------+
+| interface          | 2/2
+| chassis-id         | 02:ff:05:00:00:05
+| port-id            | 635
+| system-name        | core06.site05.example.test
+| management-address | 192.0.2.36
+
++--------------------+-----------------------------------------+
+| interface          | 2/3
+| chassis-id         | 02:ff:05:00:00:06
+| port-id            | HundredGigE0/0/0/24
+| system-name        | border02.site02.example.test
+| management-address | 192.0.2.1

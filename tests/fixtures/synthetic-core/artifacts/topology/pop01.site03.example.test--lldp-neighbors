@@ -1,0 +1,13 @@
++--------------------+-----------------------------------------+
+| interface          | 7
+| chassis-id         | 02:ff:03:00:00:01
+| port-id            | sfp28-1
+| system-name        | cust10.site03.example.test
+| management-address | 192.0.2.14
+
++--------------------+-----------------------------------------+
+| interface          | 2/1
+| chassis-id         | 02:ff:03:00:00:02
+| port-id            | 2/1
+| system-name        | core01.site01.example.test
+| management-address | 192.0.2.5

@@ -1,0 +1,221 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PROJECT="libremapper-realdata-dev"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+LOCAL_DEV_DIR="${ROOT}/.realdata-dev"
+COMPOSE_FILE="${ROOT}/dev/compose.yaml"
+DEFAULT_FIXTURE="${ROOT}/tests/fixtures/synthetic-core"
+LIBRENMS_IMAGE="${LIBRENMS_IMAGE:-librenms/librenms@sha256:c2208d11f4a9e240dcd763a70b5ba856ae475e26c53675f675e1e346514a6066}"
+LIBRENMS_VERSION="${LIBRENMS_VERSION:-26.10.2}"
+MARIADB_IMAGE="mariadb@sha256:b1c7bf836e64ed9406a8984af29509f40089d55cea14b32f12c4726a1f17104b"
+export LOCAL_DEV_DIR
+
+usage() {
+  cat <<'EOF'
+Usage:
+  scripts/dev-stack reset [--fixture DIR]
+  scripts/dev-stack up
+  scripts/dev-stack status
+  scripts/dev-stack inventory
+  scripts/dev-stack logs [SERVICE]
+  scripts/dev-stack down
+EOF
+}
+
+ensure_key() {
+  local name="$1" value="$2"
+  grep -q "^${name}=" "${LOCAL_DEV_DIR}/.env" || printf '%s=%s\n' "${name}" "${value}" >>"${LOCAL_DEV_DIR}/.env"
+}
+
+ensure_local() {
+  mkdir -p "${LOCAL_DEV_DIR}/artifacts" "${LOCAL_DEV_DIR}/config"
+  chmod 0755 "${LOCAL_DEV_DIR}/artifacts" "${LOCAL_DEV_DIR}/config"
+  if [[ ! -f "${LOCAL_DEV_DIR}/.env" ]]; then
+    (
+      umask 077
+      {
+        printf 'DB_NAME=librenms\n'
+        printf 'DB_USER=librenms\n'
+        printf 'DB_PASSWORD=%s\n' "$(openssl rand -hex 24)"
+        printf 'DB_ROOT_PASSWORD=%s\n' "$(openssl rand -hex 24)"
+        printf 'ADMIN_PASSWORD=%s\n' "$(openssl rand -hex 24)"
+        printf 'LIBREMAPPER_API_TOKEN=%s\n' "$(openssl rand -hex 32)"
+        printf 'TZ=America/Los_Angeles\n'
+        printf 'LOCAL_DEV_DIR=%s\n' "${LOCAL_DEV_DIR}"
+      } >"${LOCAL_DEV_DIR}/.env"
+    )
+  fi
+  ensure_key ADMIN_PASSWORD "$(openssl rand -hex 24)"
+  ensure_key LIBREMAPPER_API_TOKEN "$(openssl rand -hex 32)"
+  ensure_key LOCAL_DEV_DIR "${LOCAL_DEV_DIR}"
+  {
+    printf 'LIBRENMS_IMAGE=%s\n' "${LIBRENMS_IMAGE}"
+    printf 'LIBRENMS_VERSION=%s\n' "${LIBRENMS_VERSION}"
+    printf 'LIBRENMS_DIGEST=%s\n' "${LIBRENMS_IMAGE#*@}"
+    printf 'MARIADB_IMAGE=%s\n' "${MARIADB_IMAGE}"
+  } >"${LOCAL_DEV_DIR}/image.env"
+}
+
+compose() {
+  docker compose \
+    --project-name "${PROJECT}" \
+    --env-file "${LOCAL_DEV_DIR}/.env" \
+    --env-file "${LOCAL_DEV_DIR}/image.env" \
+    --file "${COMPOSE_FILE}" "$@"
+}
+
+env_value() {
+  local name="$1"
+  grep "^${name}=" "${LOCAL_DEV_DIR}/.env" | cut -d= -f2-
+}
+
+remove_project_volumes() {
+  local volume
+  while IFS= read -r volume; do
+    [[ -n "${volume}" ]] || continue
+    docker volume rm "${volume}"
+  done < <(
+    docker volume ls \
+      --filter "label=com.docker.compose.project=${PROJECT}" \
+      --format '{{.Name}}'
+  )
+}
+
+wait_for_service() {
+  local service="$1" container status
+  container="$(compose ps -q "${service}")"
+  for _ in $(seq 1 90); do
+    status="$(docker inspect "${container}" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}')"
+    if [[ "${status}" == "healthy" || "${status}" == "running" ]]; then
+      return
+    fi
+    if [[ "${status}" == "unhealthy" || "${status}" == "exited" ]]; then
+      compose logs "${service}"
+      return 1
+    fi
+    sleep 2
+  done
+  echo "Timed out waiting for ${service}." >&2
+  return 1
+}
+
+record_manifest() {
+  local manifest="${LOCAL_DEV_DIR}/ownership-manifest.txt"
+  {
+    printf 'project\t%s\n' "${PROJECT}"
+    printf 'recorded_at\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    if [[ -f "${LOCAL_DEV_DIR}/fixture.sha256" ]]; then
+      printf 'fixture_sha256\t%s\n' "$(cat "${LOCAL_DEV_DIR}/fixture.sha256")"
+    fi
+    printf 'librenms_image\t%s\n' "${LIBRENMS_IMAGE}"
+    printf 'mariadb_image\t%s\n' "${MARIADB_IMAGE}"
+    printf '\ncontainers\n'
+    docker ps -a --filter "label=com.docker.compose.project=${PROJECT}" --format '{{.ID}}\t{{.Names}}\t{{.Image}}'
+    printf '\nnetworks\n'
+    docker network ls --filter "label=com.docker.compose.project=${PROJECT}" --format '{{.ID}}\t{{.Name}}'
+    printf '\nvolumes\n'
+    docker volume ls --filter "label=com.docker.compose.project=${PROJECT}" --format '{{.Name}}'
+  } >"${manifest}"
+}
+
+reset_stack() {
+  local fixture="${DEFAULT_FIXTURE}"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --fixture)
+        fixture="${2:-}"
+        shift 2
+        ;;
+      *)
+        usage
+        exit 2
+        ;;
+    esac
+  done
+  if [[ ! -f "${fixture}/topology.json" || ! -f "${fixture}/librenms-seed.sql" || ! -f "${fixture}/libremapper.yaml" || ! -f "${fixture}/manual-topology.yaml" ]]; then
+    echo "Fixture is incomplete: ${fixture}" >&2
+    exit 2
+  fi
+  "${ROOT}/scripts/generate-test-fixture" --fixture "${fixture}" --check
+
+  ensure_local
+  compose down --remove-orphans
+  remove_project_volumes
+  find "${LOCAL_DEV_DIR}/artifacts" -mindepth 1 -delete
+  cp -R "${fixture}/artifacts/." "${LOCAL_DEV_DIR}/artifacts/"
+  find "${LOCAL_DEV_DIR}/config" -mindepth 1 -delete
+  cp "${fixture}/libremapper.yaml" "${LOCAL_DEV_DIR}/config/libremapper.yaml"
+  cp "${fixture}/manual-topology.yaml" "${LOCAL_DEV_DIR}/config/manual-topology.yaml"
+  if [[ -d "${fixture}/maps" ]]; then
+    cp -R "${fixture}/maps" "${LOCAL_DEV_DIR}/config/maps"
+  fi
+  mkdir -p "${LOCAL_DEV_DIR}/config/maps"
+  sha256sum "${fixture}/topology.json" | cut -d' ' -f1 >"${LOCAL_DEV_DIR}/fixture.sha256"
+  # ponytail: isolated synthetic fixture; production config stays UID 1000-owned.
+  chmod -R a=rwX "${LOCAL_DEV_DIR}/config"
+
+  compose up -d --build librenms libremapper
+  wait_for_service db
+  wait_for_service librenms
+  wait_for_service libremapper
+  local database root_password admin_password
+  database="$(env_value DB_NAME)"
+  root_password="$(env_value DB_ROOT_PASSWORD)"
+  admin_password="$(env_value ADMIN_PASSWORD)"
+  compose exec -T db mariadb -u root "-p${root_password}" "${database}" <"${fixture}/librenms-seed.sql"
+  compose exec -T librenms lnms config:set password.uncompromised false --no-interaction
+  compose exec -T librenms lnms user:add admin --password="${admin_password}" --role=admin
+  compose exec -T librenms sed -i '/^INSTALL=/d' /opt/librenms/.env
+  compose exec -T --user librenms librenms composer config repositories.libremapper \
+    '{"type":"path","url":"/opt/libremapper/package","options":{"symlink":false,"versions":{"echotechnic/libremapper":"dev-main"}}}'
+  compose exec -T --user librenms librenms lnms plugin:add echotechnic/libremapper @dev
+  compose exec -T --user librenms librenms php artisan route:clear
+  compose exec -T --user librenms librenms php artisan config:clear
+  compose restart librenms libremapper
+  wait_for_service librenms
+  wait_for_service libremapper
+  record_manifest
+  printf 'LibreNMS: http://127.0.0.1:18201 (admin / password in %s/.env)\n' "${LOCAL_DEV_DIR}"
+}
+
+command="${1:-}"
+shift || true
+case "${command}" in
+  reset)
+    reset_stack "$@"
+    ;;
+  up)
+    ensure_local
+    compose up -d --build librenms libremapper
+    wait_for_service librenms
+    wait_for_service libremapper
+    record_manifest
+    ;;
+  status)
+    ensure_local
+    compose ps
+    record_manifest
+    ;;
+  inventory)
+    ensure_local
+    compose exec -T \
+      -e LIBREMAPPER_CONFIG=/config/libremapper.yaml \
+      libremapper libremapper inventory --json \
+      | tee "${LOCAL_DEV_DIR}/inventory.json"
+    record_manifest
+    ;;
+  logs)
+    ensure_local
+    compose logs "$@"
+    ;;
+  down)
+    ensure_local
+    compose down --remove-orphans
+    record_manifest
+    ;;
+  *)
+    usage
+    exit 2
+    ;;
+esac

@@ -1,0 +1,139 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: install-or-update VERSION [COMPOSE_FILE ...]
+
+Install or update the Libremapper sidecar and native LibreNMS plugin together.
+Without file arguments, the script finds the local Compose file and adds
+compose.libremapper.yaml.
+EOF
+}
+
+version="${1:-}"
+if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  usage >&2
+  exit 2
+fi
+shift
+
+env_file="${LIBREMAPPER_ENV_FILE:-.env}"
+if [[ ! -f "${env_file}" ]]; then
+  echo "Missing ${env_file}; add the LibreNMS database values and LIBREMAPPER_API_TOKEN first." >&2
+  exit 2
+fi
+
+compose_files=("$@")
+if [[ ${#compose_files[@]} -eq 0 ]]; then
+  for candidate in compose.yaml compose.yml docker-compose.yaml docker-compose.yml; do
+    if [[ -f "${candidate}" ]]; then
+      compose_files=("${candidate}")
+      break
+    fi
+  done
+  if [[ ${#compose_files[@]} -eq 0 || ! -f compose.libremapper.yaml ]]; then
+    echo "Could not find the main Compose file and compose.libremapper.yaml." >&2
+    exit 2
+  fi
+  compose_files+=(compose.libremapper.yaml)
+fi
+
+compose=(docker compose --env-file "${env_file}")
+for file in "${compose_files[@]}"; do
+  if [[ ! -f "${file}" ]]; then
+    echo "Compose file not found: ${file}" >&2
+    exit 2
+  fi
+  compose+=(--file "${file}")
+done
+
+export LIBREMAPPER_VERSION="${version}"
+"${compose[@]}" config --quiet
+"${compose[@]}" pull libremapper
+
+if grep -q '^LIBREMAPPER_VERSION=' "${env_file}"; then
+  sed -i "s/^LIBREMAPPER_VERSION=.*/LIBREMAPPER_VERSION=${version}/" "${env_file}"
+else
+  printf '\nLIBREMAPPER_VERSION=%s\n' "${version}" >>"${env_file}"
+fi
+
+"${compose[@]}" up -d librenms libremapper
+
+sidecar_id="$("${compose[@]}" ps -q libremapper)"
+librenms_id="$("${compose[@]}" ps -q librenms)"
+if [[ -z "${sidecar_id}" || -z "${librenms_id}" ]]; then
+  echo "LibreNMS or Libremapper did not start." >&2
+  exit 1
+fi
+
+for _ in $(seq 1 60); do
+  status="$(docker inspect "${sidecar_id}" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}')"
+  if [[ "${status}" == healthy ]]; then
+    break
+  fi
+  if [[ "${status}" == unhealthy || "${status}" == exited ]]; then
+    "${compose[@]}" logs libremapper
+    exit 1
+  fi
+  sleep 2
+done
+if [[ "${status}" != healthy ]]; then
+  echo "Timed out waiting for the Libremapper sidecar." >&2
+  exit 1
+fi
+
+health="$("${compose[@]}" exec -T libremapper python -c \
+  "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8001/health').read().decode())")"
+if [[ "${health}" != *'"version":"'"${version}"'"'* ]]; then
+  echo "Sidecar version check failed: ${health}" >&2
+  exit 1
+fi
+
+package_root="$(mktemp -d)"
+trap 'rm -rf "${package_root}"' EXIT
+docker cp "${sidecar_id}:/usr/share/libremapper-plugin" "${package_root}/package"
+docker exec --user root "${librenms_id}" rm -rf -- /opt/librenms/libremapper-package
+docker cp "${package_root}/package" "${librenms_id}:/opt/librenms/libremapper-package"
+
+repository="$(printf '{\"type\":\"path\",\"url\":\"/opt/librenms/libremapper-package\",\"options\":{\"symlink\":false,\"versions\":{\"echotechnic/libremapper\":\"%s\"}}}' "${version}")"
+"${compose[@]}" exec -T --user librenms librenms \
+  composer config repositories.libremapper "${repository}"
+"${compose[@]}" exec -T --user librenms librenms \
+  lnms plugin:add echotechnic/libremapper "${version}"
+"${compose[@]}" exec -T --user librenms librenms \
+  lnms plugin:enable libremapper
+"${compose[@]}" exec -T --user librenms librenms \
+  php artisan route:clear
+"${compose[@]}" restart librenms
+
+for _ in $(seq 1 60); do
+  status="$(docker inspect "${librenms_id}" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}')"
+  if [[ "${status}" == healthy || "${status}" == running ]]; then
+    break
+  fi
+  if [[ "${status}" == unhealthy || "${status}" == exited ]]; then
+    "${compose[@]}" logs librenms
+    exit 1
+  fi
+  sleep 2
+done
+if [[ "${status}" != healthy && "${status}" != running ]]; then
+  echo "Timed out waiting for LibreNMS." >&2
+  exit 1
+fi
+
+installed_package="$("${compose[@]}" exec -T --user librenms librenms \
+  composer show echotechnic/libremapper --format=json)"
+if ! grep -Fq -e "\"${version}\"" -e "\"v${version}\"" <<<"${installed_package}"; then
+  echo "The installed plugin version does not match ${version}." >&2
+  exit 1
+fi
+installed_routes="$("${compose[@]}" exec -T --user librenms librenms \
+  php artisan route:list --path=plugin/libremapper --json)"
+if ! grep -q 'libremapper.apply' <<<"${installed_routes}"; then
+  echo "The Libremapper plugin routes did not load." >&2
+  exit 1
+fi
+
+printf 'Libremapper %s is installed. Open Plugins -> Libremapper -> Settings.\n' "${version}"

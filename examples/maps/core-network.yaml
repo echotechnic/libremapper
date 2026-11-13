@@ -1,0 +1,38 @@
+key: core-network
+name: Automatically Generated Core
+example: true
+menu_group: Generated
+scheduled: false
+width: 1600px
+height: 800px
+edge_separation: 24
+sources:
+  - provider: librenms
+    selectors:
+      - type: group
+        value: Core
+        layer: 0
+      - type: location
+        value: "^Branch"
+        layer: 1
+    protocols: [lldp, cdp, ip-p2p, mac, bgp, ospf]
+    interface_types:
+      - ethernetCsmacd
+      - ieee8023adLag
+      - gigabitEthernet
+  - provider: external
+    selectors: []
+identity:
+  keys: [fqdn, management_ip, hostname]
+  aliases:
+    "hostname:edge-a": "hostname:edge-a.example.net"
+layout:
+  type: force
+  width: 1600
+  height: 800
+  margin: 60
+  layer_spacing: 180
+  node_spacing: 120
+  radius: 180
+  auto_grow: false
+  seed: 42

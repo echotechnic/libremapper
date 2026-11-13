@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+if [[ $# -lt 2 ]]; then
+  echo "Usage: scripts/dev-reconcile PROVIDER MAP [MAP ...]" >&2
+  exit 2
+fi
+provider="$1"
+shift
+
+"${ROOT}/scripts/dev-run" provider inspect "${provider}" --json >/dev/null
+"${ROOT}/scripts/dev-run" links plan "${provider}" \
+  --output "/data/libremapper/plans/${provider}-links.json"
+"${ROOT}/scripts/dev-run" links sync "/data/libremapper/plans/${provider}-links.json" --yes
+for map_key in "$@"; do
+  "${ROOT}/scripts/dev-run" apply "${map_key}" --yes
+done

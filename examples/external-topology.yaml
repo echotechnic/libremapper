@@ -1,0 +1,25 @@
+version: 1
+devices:
+  - source_id: wan-provider
+    hostname: Internet
+    layer: 0
+    attributes:
+      role: external
+  - source_id: edge-a
+    hostname: edge-a.example.net
+    management_ip: 192.0.2.10
+    layer: 1
+    interfaces:
+      - source_id: uplink
+        device_source_id: edge-a
+        name: Ethernet1
+links:
+  - source_id: carrier-edge-a
+    protocol: external
+    confidence: 0.8
+    a:
+      device: wan-provider
+    b:
+      device: edge-a
+      interface: uplink
+

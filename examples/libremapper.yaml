@@ -1,0 +1,20 @@
+version: 1
+state_path: /data/libremapper/state.sqlite3
+map_directory: maps
+
+librenms: {}
+
+providers:
+  librenms:
+    type: librenms
+    settings:
+      include_ip_adjacency: true
+      include_mac_adjacency: true
+      include_routing_adjacency: true
+      include_external_bgp_peers: true
+  external:
+    type: file
+    settings:
+      path: /config/external-topology.yaml
+
+maps: []

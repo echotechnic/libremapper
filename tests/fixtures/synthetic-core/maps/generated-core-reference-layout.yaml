@@ -1,0 +1,125 @@
+key: generated-core-reference-layout
+name: Generated Core Reference Layout
+example: true
+menu_group: Libremapper Test
+width: '1600'
+height: '800'
+edge_separation: 24
+node_label: short_hostname
+sources:
+- provider: native
+  selectors:
+  - type: group
+    value: Reference Aggregation
+    layer: -10
+  - type: group
+    value: Reference Core
+    layer: 0
+  - type: group
+    value: Reference POP
+    layer: 10
+  - type: group
+    value: Reference Customer
+    layer: 20
+  protocols:
+  - lldp
+  - cdp
+  - ip-p2p
+  - mac
+  - bgp
+  - ospf
+- provider: artifacts
+  selectors:
+  - type: group
+    value: Reference Aggregation
+    layer: -10
+  - type: group
+    value: Reference Core
+    layer: 0
+  - type: group
+    value: Reference POP
+    layer: 10
+  - type: group
+    value: Reference Customer
+    layer: 20
+layout:
+  type: left
+  width: 1600
+  height: 800
+  margin: 60
+  layer_spacing: 180
+  node_spacing: 120
+  auto_grow: false
+  center_layer: 0
+  separation: constrained
+  layer_margins:
+    -30:
+    - 110
+    - 110
+    -20:
+    - 70
+    - 120
+    -10:
+    - 70
+    - 120
+    0:
+    - 0
+    - 720
+    10:
+    - 70
+    - 120
+    20:
+    - 70
+    - 120
+    30:
+    - 280
+    - 120
+node_defaults:
+  style: image
+  image: router.svg
+  size: 25
+  border_width: 1
+  text_face: arial
+  text_size: 14
+  text_colour: '#343434'
+  colour_bg: '#d2e5ff'
+  colour_bdr: '#2b7ce9'
+edge_defaults:
+  style: cubicBezier
+  showpct: false
+  showbps: true
+  text_face: arial
+  text_size: 12
+  text_colour: '#343434'
+  text_align: top
+logical_edge_defaults:
+  style: dynamic
+  showpct: false
+  showbps: false
+  text_face: arial
+  text_size: 12
+  text_colour: '#6b7280'
+  text_align: horizontal
+layer_overrides:
+- type: hostname
+  value: ^cust(?:0[1-8]|10)\.
+  layer: -30
+- type: hostname
+  value: ^(?:oob01|oob03|pop01)\.
+  layer: -20
+- type: hostname
+  value: ^(?:Transit 01$|(?:border01|core01)\.)
+  layer: -10
+- type: hostname
+  value: ^OOB Provider 01$
+  layer: 0
+- type: hostname
+  value: ^(?:Transit 02$|(?:border02|core02)\.)
+  layer: 10
+- type: hostname
+  value: ^(?:oob02|oob04|pop02)\.
+  layer: 20
+- type: hostname
+  value: ^cust(?:09|1[1-3])\.
+  layer: 30
+scheduled: false

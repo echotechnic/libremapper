@@ -1,0 +1,30 @@
+services:
+  librenms:
+    environment:
+      LIBREMAPPER_API_URL: http://127.0.0.1:8001
+    volumes:
+      - ${LIBREMAPPER_CONFIG_PATH:-./config}:/config
+      - libremapper-data:/data/libremapper
+
+  libremapper:
+    build:
+      context: .
+    image: libremapper:local
+    network_mode: service:librenms
+    environment:
+      DB_HOST: ${DB_HOST:-librenms-db}
+      DB_PORT: ${DB_PORT:-3306}
+      DB_NAME: ${DB_NAME:-librenms}
+      DB_USER: ${DB_USER:-librenms}
+      DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in the environment or .env}
+      LIBREMAPPER_API_TOKEN: ${LIBREMAPPER_API_TOKEN:?Set LIBREMAPPER_API_TOKEN in the environment or .env}
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+    volumes:
+      - ${LIBREMAPPER_CONFIG_PATH:-./config}:/config
+      - libremapper-data:/data/libremapper
+      - ${OXIDIZED_PATH:-./oxidized}:/oxidized:ro
+    restart: unless-stopped
+
+volumes:
+  libremapper-data:

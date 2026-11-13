@@ -1,0 +1,571 @@
+{
+  "$defs": {
+    "EdgeDefaults": {
+      "properties": {
+        "style": {
+          "default": "dynamic",
+          "title": "Style",
+          "type": "string"
+        },
+        "showpct": {
+          "default": true,
+          "title": "Showpct",
+          "type": "boolean"
+        },
+        "showbps": {
+          "default": false,
+          "title": "Showbps",
+          "type": "boolean"
+        },
+        "fixed_width": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fixed Width"
+        },
+        "text_face": {
+          "default": "arial",
+          "title": "Text Face",
+          "type": "string"
+        },
+        "text_size": {
+          "default": 12,
+          "title": "Text Size",
+          "type": "integer"
+        },
+        "text_colour": {
+          "default": "#243A54",
+          "title": "Text Colour",
+          "type": "string"
+        },
+        "text_align": {
+          "default": "horizontal",
+          "title": "Text Align",
+          "type": "string"
+        }
+      },
+      "title": "EdgeDefaults",
+      "type": "object",
+      "additionalProperties": false
+    },
+    "IdentityConfig": {
+      "properties": {
+        "keys": {
+          "items": {
+            "enum": [
+              "fqdn",
+              "management_ip",
+              "hostname"
+            ],
+            "type": "string"
+          },
+          "title": "Keys",
+          "type": "array"
+        },
+        "aliases": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Aliases",
+          "type": "object"
+        }
+      },
+      "title": "IdentityConfig",
+      "type": "object",
+      "additionalProperties": false
+    },
+    "LayoutConfig": {
+      "properties": {
+        "type": {
+          "default": "force",
+          "enum": [
+            "auto",
+            "force",
+            "top",
+            "left",
+            "radial"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "width": {
+          "default": 1600,
+          "title": "Width",
+          "type": "integer"
+        },
+        "height": {
+          "default": 800,
+          "title": "Height",
+          "type": "integer"
+        },
+        "margin": {
+          "default": 60,
+          "title": "Margin",
+          "type": "integer"
+        },
+        "layer_spacing": {
+          "default": 180,
+          "title": "Layer Spacing",
+          "type": "integer"
+        },
+        "node_spacing": {
+          "default": 120,
+          "title": "Node Spacing",
+          "type": "integer"
+        },
+        "radius": {
+          "default": 180,
+          "title": "Radius",
+          "type": "integer"
+        },
+        "seed": {
+          "default": 42,
+          "title": "Seed",
+          "type": "integer"
+        },
+        "iterations": {
+          "default": 100,
+          "title": "Iterations",
+          "type": "integer"
+        },
+        "infer_layers": {
+          "default": false,
+          "title": "Infer Layers",
+          "type": "boolean"
+        },
+        "auto_grow": {
+          "default": false,
+          "title": "Auto Grow",
+          "type": "boolean"
+        },
+        "center_layer": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Center Layer"
+        },
+        "separation": {
+          "default": "packed",
+          "enum": [
+            "packed",
+            "constrained"
+          ],
+          "title": "Separation",
+          "type": "string"
+        },
+        "layer_margins": {
+          "additionalProperties": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "integer"
+              }
+            ],
+            "type": "array"
+          },
+          "title": "Layer Margins",
+          "type": "object"
+        }
+      },
+      "title": "LayoutConfig",
+      "type": "object",
+      "additionalProperties": false
+    },
+    "LinkGraphOverride": {
+      "properties": {
+        "canonical_id": {
+          "minLength": 1,
+          "title": "Canonical Id",
+          "type": "string"
+        },
+        "port_id": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Port Id"
+        }
+      },
+      "required": [
+        "canonical_id"
+      ],
+      "title": "LinkGraphOverride",
+      "type": "object",
+      "additionalProperties": false
+    },
+    "NodeDefaults": {
+      "properties": {
+        "style": {
+          "default": "box",
+          "title": "Style",
+          "type": "string"
+        },
+        "icon": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Icon"
+        },
+        "image": {
+          "default": "",
+          "title": "Image",
+          "type": "string"
+        },
+        "node_image_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Node Image Id"
+        },
+        "size": {
+          "default": 25,
+          "title": "Size",
+          "type": "integer"
+        },
+        "border_width": {
+          "default": 1,
+          "title": "Border Width",
+          "type": "integer"
+        },
+        "text_face": {
+          "default": "arial",
+          "title": "Text Face",
+          "type": "string"
+        },
+        "text_size": {
+          "default": 14,
+          "title": "Text Size",
+          "type": "integer"
+        },
+        "text_colour": {
+          "default": "#243A54",
+          "title": "Text Colour",
+          "type": "string"
+        },
+        "colour_bg": {
+          "default": "#D2E5FF",
+          "title": "Colour Bg",
+          "type": "string"
+        },
+        "colour_bdr": {
+          "default": "#2B7CE9",
+          "title": "Colour Bdr",
+          "type": "string"
+        }
+      },
+      "title": "NodeDefaults",
+      "type": "object",
+      "additionalProperties": false
+    },
+    "SelectorConfig": {
+      "properties": {
+        "type": {
+          "enum": [
+            "hostname",
+            "location",
+            "group",
+            "device_id",
+            "canonical",
+            "attribute"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            }
+          ],
+          "title": "Value"
+        },
+        "layer": {
+          "default": 0,
+          "title": "Layer",
+          "type": "integer"
+        },
+        "attribute": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Attribute"
+        }
+      },
+      "required": [
+        "type",
+        "value"
+      ],
+      "title": "SelectorConfig",
+      "type": "object",
+      "additionalProperties": false
+    },
+    "ShortHostnameOverride": {
+      "properties": {
+        "device_id": {
+          "exclusiveMinimum": 0,
+          "title": "Device Id",
+          "type": "integer"
+        },
+        "parts": {
+          "maximum": 127,
+          "minimum": 1,
+          "title": "Parts",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "device_id",
+        "parts"
+      ],
+      "title": "ShortHostnameOverride",
+      "type": "object",
+      "additionalProperties": false
+    },
+    "SourceConfig": {
+      "properties": {
+        "provider": {
+          "title": "Provider",
+          "type": "string"
+        },
+        "selectors": {
+          "items": {
+            "$ref": "#/$defs/SelectorConfig"
+          },
+          "title": "Selectors",
+          "type": "array"
+        },
+        "protocols": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Protocols",
+          "type": "array"
+        },
+        "interface_types": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Interface Types",
+          "type": "array"
+        },
+        "parsers": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parsers"
+        }
+      },
+      "required": [
+        "provider"
+      ],
+      "title": "SourceConfig",
+      "type": "object",
+      "additionalProperties": false
+    }
+  },
+  "properties": {
+    "name": {
+      "title": "Name",
+      "type": "string"
+    },
+    "menu_group": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Menu Group"
+    },
+    "width": {
+      "default": "1600px",
+      "title": "Width",
+      "type": "string"
+    },
+    "height": {
+      "default": "800px",
+      "title": "Height",
+      "type": "string"
+    },
+    "node_align": {
+      "default": 10,
+      "title": "Node Align",
+      "type": "integer"
+    },
+    "edge_separation": {
+      "default": 24,
+      "title": "Edge Separation",
+      "type": "integer"
+    },
+    "scheduled": {
+      "default": false,
+      "title": "Scheduled",
+      "type": "boolean"
+    },
+    "reverse_arrows": {
+      "default": false,
+      "title": "Reverse Arrows",
+      "type": "boolean"
+    },
+    "node_label": {
+      "default": "full",
+      "enum": [
+        "full",
+        "short_hostname",
+        "sys_name"
+      ],
+      "title": "Node Label",
+      "type": "string"
+    },
+    "short_hostname_parts": {
+      "default": 2,
+      "maximum": 127,
+      "minimum": 1,
+      "title": "Short Hostname Parts",
+      "type": "integer"
+    },
+    "short_hostname_overrides": {
+      "items": {
+        "$ref": "#/$defs/ShortHostnameOverride"
+      },
+      "title": "Short Hostname Overrides",
+      "type": "array"
+    },
+    "sources": {
+      "items": {
+        "$ref": "#/$defs/SourceConfig"
+      },
+      "title": "Sources",
+      "type": "array"
+    },
+    "device_exclusions": {
+      "items": {
+        "type": "integer"
+      },
+      "title": "Device Exclusions",
+      "type": "array"
+    },
+    "manual_link_exclusions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Manual Link Exclusions",
+      "type": "array"
+    },
+    "link_inclusions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Link Inclusions",
+      "type": "array"
+    },
+    "link_exclusions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Link Exclusions",
+      "type": "array"
+    },
+    "manual_device_inclusions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Manual Device Inclusions",
+      "type": "array"
+    },
+    "manual_device_exclusions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Manual Device Exclusions",
+      "type": "array"
+    },
+    "link_graph_overrides": {
+      "items": {
+        "$ref": "#/$defs/LinkGraphOverride"
+      },
+      "title": "Link Graph Overrides",
+      "type": "array"
+    },
+    "layer_overrides": {
+      "items": {
+        "$ref": "#/$defs/SelectorConfig"
+      },
+      "title": "Layer Overrides",
+      "type": "array"
+    },
+    "identity": {
+      "$ref": "#/$defs/IdentityConfig"
+    },
+    "layout": {
+      "$ref": "#/$defs/LayoutConfig"
+    },
+    "node_defaults": {
+      "$ref": "#/$defs/NodeDefaults"
+    },
+    "edge_defaults": {
+      "$ref": "#/$defs/EdgeDefaults"
+    },
+    "logical_edge_defaults": {
+      "$ref": "#/$defs/EdgeDefaults"
+    }
+  },
+  "title": "MapConfig",
+  "type": "object",
+  "additionalProperties": false
+}

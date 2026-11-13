@@ -1,0 +1,39 @@
+version: 1
+state_path: /data/libremapper/state.sqlite3
+map_directory: maps
+librenms: {}
+experimental:
+  native_link_sync: false
+manual_provider: manual
+providers:
+  native:
+    type: librenms
+    settings:
+      include_ip_adjacency: true
+      include_mac_adjacency: true
+      include_routing_adjacency: true
+      include_external_bgp_peers: false
+  artifacts:
+    type: regex_artifacts
+    settings:
+      root: /oxidized
+      file_glob: topology/*--lldp-neighbors
+      path_regex: ^topology/(?P<device_name>.+)--lldp-neighbors$
+      zero_output_guard: true
+      rules:
+      - name: saos10-lldp-neighbors
+        flags:
+        - MULTILINE
+        - DOTALL
+        regex: '^\|\s*interface\s*\|\s*(?P<local_interface>[^|\r\n]+).*?
+
+          ^\|\s*chassis-id\s*\|\s*(?P<remote_chassis_id>[^|\r\n]+).*?
+
+          ^\|\s*port-id\s*\|\s*(?P<remote_interface>[^|\r\n]+).*?
+
+          ^\|\s*system-name\s*\|\s*(?P<remote_hostname>[^|\r\n]+)'
+  manual:
+    type: file
+    settings:
+      path: manual-topology.yaml
+maps: []

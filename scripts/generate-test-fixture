@@ -1,0 +1,689 @@
+#!/usr/bin/env python3
+"""Generate the committed, inert LibreNMS/SAOS test fixture."""
+
+from __future__ import annotations
+
+import argparse
+import ipaddress
+import json
+import re
+from collections import Counter
+from pathlib import Path
+from typing import Any
+
+ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_FIXTURE = ROOT / "tests/fixtures/synthetic-core"
+HOSTNAME = re.compile(r"[a-z0-9]+\.site(?:0[0-9])\.example\.test")
+INTERFACE = re.compile(r"[A-Za-z0-9._/+:-]+")
+
+
+def sql_value(value: Any) -> str:
+    if value is None:
+        return "NULL"
+    if isinstance(value, bool):
+        return str(int(value))
+    if isinstance(value, (int, float)):
+        return str(value)
+    return "'" + str(value).replace("\\", "\\\\").replace("'", "''") + "'"
+
+
+def insert(table: str, columns: list[str], rows: list[list[Any]]) -> str:
+    values = ",\n".join("  (" + ", ".join(map(sql_value, row)) + ")" for row in rows)
+    names = ", ".join(f"`{column}`" for column in columns)
+    return f"INSERT INTO `{table}` ({names}) VALUES\n{values};\n"
+
+
+def validate(data: dict[str, Any]) -> None:
+    serialized = json.dumps(data).lower()
+    assert not any(
+        marker in serialized
+        for marker in (".gov", "http://", "https://", "@", "password", "community", "secret")
+    )
+    assert data["version"] == 1
+    assert len(data["artifacts"]) == 9
+    assert sum(len(item["neighbors"]) for item in data["artifacts"]) == 31
+    assert len(data["reference_map"]["nodes"]) == 26
+    assert len(data["reference_map"]["edges"]) == 31
+    assert len(data["groups"]) == 4
+    assert data["ip_addresses"]
+    assert data["mac_adjacencies"]
+    assert data["bgp_peers"]
+    assert data["ospf_neighbors"]
+
+    device_ids = {device["id"] for device in data["devices"]}
+    reference_device_ids = {
+        node["device_id"]
+        for node in data["reference_map"]["nodes"]
+        if node["device_id"] is not None
+    }
+    assert {device_id for group in data["groups"] for device_id in group["device_ids"]} == (
+        reference_device_ids
+    )
+    assert len({node["label"] for node in data["reference_map"]["nodes"]}) == 26
+    assert Counter(device["role"] for device in data["devices"]) == {
+        "border": 2,
+        "core": 9,
+        "customer": 14,
+        "device": 4,
+        "firewall": 2,
+        "monitor": 1,
+        "oob": 9,
+        "pop": 2,
+    }
+    for role, prefix, count in (
+        ("border", "border", 2),
+        ("core", "core", 9),
+        ("customer", "cust", 14),
+        ("oob", "oob", 9),
+        ("pop", "pop", 2),
+    ):
+        assert sorted(
+            device["hostname"].split(".", 1)[0]
+            for device in data["devices"]
+            if device["role"] == role
+        ) == [f"{prefix}{number:02d}" for number in range(1, count + 1)]
+    assert {group["name"]: set(group["device_ids"]) for group in data["groups"]} == {
+        "Reference Aggregation": {1001, 1002, 1020, 1021, 1023, 1024},
+        "Reference Core": {1005, 1006},
+        "Reference Customer": {
+            1014,
+            1015,
+            1016,
+            1017,
+            1018,
+            1019,
+            1033,
+            1034,
+            1039,
+            1040,
+            1041,
+            1042,
+            1043,
+        },
+        "Reference POP": {1007, 1010},
+    }
+    port_ids = {port["id"] for port in data["ports"]}
+    for device in data["devices"]:
+        assert HOSTNAME.fullmatch(device["hostname"])
+        assert ipaddress.ip_address(device["ip"]) in ipaddress.ip_network("192.0.2.0/24")
+    for port in data["ports"]:
+        assert port["device_id"] in device_ids
+        assert INTERFACE.fullmatch(port["if_name"])
+        assert INTERFACE.fullmatch(port["if_descr"])
+        assert re.fullmatch(r"02:00:0[01]:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}", port["mac"])
+    for artifact in data["artifacts"]:
+        assert HOSTNAME.fullmatch(artifact["hostname"])
+        for neighbor in artifact["neighbors"]:
+            assert HOSTNAME.fullmatch(neighbor["remote_hostname"])
+            assert INTERFACE.fullmatch(neighbor["local_interface"])
+            assert INTERFACE.fullmatch(neighbor["remote_interface"])
+            if neighbor["remote_ip"]:
+                assert ipaddress.ip_address(neighbor["remote_ip"]) in ipaddress.ip_network(
+                    "192.0.2.0/24"
+                )
+    assert all(link["local_device_id"] in device_ids for link in data["native_links"])
+    assert all(link["remote_device_id"] in device_ids for link in data["native_links"])
+    assert all(link["local_port_id"] in port_ids for link in data["native_links"])
+    assert all(link["remote_port_id"] in port_ids for link in data["native_links"])
+    assert all(row["port_id"] in port_ids for row in data["ip_addresses"])
+    assert all(row["port_id"] in port_ids for row in data["mac_adjacencies"])
+    assert all(row["device_id"] in device_ids for row in data["bgp_peers"])
+    assert all(row["device_id"] in device_ids for row in data["ospf_instances"])
+    assert all(row["device_id"] in device_ids for row in data["ospf_neighbors"])
+    assert all(row["port_id"] in port_ids for row in data["ospf_neighbors"])
+
+
+def fixture_ports(data: dict[str, Any]) -> list[dict[str, Any]]:
+    ports = [dict(port) for port in data["ports"]]
+    device_ids = {device["hostname"]: device["id"] for device in data["devices"]}
+    existing = {
+        (port["device_id"], str(value))
+        for port in ports
+        for value in (port["if_name"], port["if_descr"], port["if_index"])
+    }
+    required: set[tuple[int, str]] = set()
+    for artifact in data["artifacts"]:
+        for neighbor in artifact["neighbors"]:
+            required.add((device_ids[artifact["hostname"]], neighbor["local_interface"]))
+            if neighbor["remote_hostname"] in device_ids:
+                required.add(
+                    (device_ids[neighbor["remote_hostname"]], neighbor["remote_interface"])
+                )
+    for device_id, name in sorted(required - existing):
+        index = len(ports) + 1
+        speed = 100_000_000_000
+        rate = speed * [1, 10, 35, 65, 90][(index - 1) % 5] // 800
+        ports.append(
+            {
+                "id": 2000 + index,
+                "device_id": device_id,
+                "if_name": name,
+                "if_descr": name,
+                "if_index": 10_000 + index,
+                "if_type": "ethernetCsmacd",
+                "if_speed": speed,
+                "mac": f"02:00:00:00:{index >> 8 & 255:02x}:{index & 255:02x}",
+                "in_rate": rate,
+                "out_rate": rate * 3 // 4,
+            }
+        )
+    return ports
+
+
+def render_sql(data: dict[str, Any]) -> str:
+    devices = {device["id"]: device for device in data["devices"]}
+    ports = {port["id"]: port for port in fixture_ports(data)}
+    reference = data["reference_map"]
+    options = {
+        "interaction": {"dragNodes": True, "dragView": True, "zoomView": True},
+        "manipulation": {"enabled": False},
+        "physics": {"enabled": False},
+    }
+    new_node = {
+        "borderWidth": 1,
+        "color": {"border": "#2b7ce9", "background": "#d2e5ff"},
+        "font": {"color": "#343434", "size": 14, "face": "arial"},
+        "icon": {},
+        "label": True,
+        "shape": "image",
+        "size": 25,
+    }
+    new_edge = {
+        "arrows": {"to": {"enabled": True}},
+        "smooth": {"type": "cubicBezier"},
+        "font": {"color": "#343434", "size": 12, "face": "arial", "align": "horizontal"},
+        "label": False,
+    }
+    statements = [
+        "-- Generated by scripts/generate-test-fixture. Do not edit.\nSET FOREIGN_KEY_CHECKS=0;\n",
+        insert(
+            "devices",
+            [
+                "device_id",
+                "hostname",
+                "sysName",
+                "display",
+                "ip",
+                "community",
+                "snmpver",
+                "snmp_disable",
+                "os",
+                "status",
+                "status_reason",
+                "ignore",
+                "disabled",
+                "type",
+                "disable_notify",
+            ],
+            [
+                [
+                    device["id"],
+                    device["hostname"],
+                    device["sys_name"],
+                    device["hostname"],
+                    f"__IP__{device['ip']}",
+                    None,
+                    "v2c",
+                    1,
+                    device["os"],
+                    1,
+                    "",
+                    1,
+                    1,
+                    device["type"],
+                    1,
+                ]
+                for device in data["devices"]
+            ],
+        ),
+        insert(
+            "ports",
+            [
+                "port_id",
+                "device_id",
+                "ifDescr",
+                "ifName",
+                "ifIndex",
+                "ifSpeed",
+                "ifOperStatus",
+                "ifAdminStatus",
+                "ifType",
+                "ifAlias",
+                "ifPhysAddress",
+                "ignore",
+                "disabled",
+                "deleted",
+                "ifInOctets_rate",
+                "ifOutOctets_rate",
+            ],
+            [
+                [
+                    port["id"],
+                    port["device_id"],
+                    port["if_descr"],
+                    port["if_name"],
+                    port["if_index"],
+                    port["if_speed"],
+                    "up",
+                    "up",
+                    port["if_type"],
+                    "Synthetic fixture",
+                    port["mac"].replace(":", ""),
+                    1,
+                    1,
+                    0,
+                    port["in_rate"],
+                    port["out_rate"],
+                ]
+                for port in ports.values()
+            ],
+        ),
+        insert(
+            "device_groups",
+            ["id", "name", "desc", "type", "rules"],
+            [
+                [group["id"], group["name"], "Synthetic fixture", "static", None]
+                for group in data["groups"]
+            ],
+        ),
+        insert(
+            "device_group_device",
+            ["device_group_id", "device_id"],
+            [
+                [group["id"], device_id]
+                for group in data["groups"]
+                for device_id in group["device_ids"]
+            ],
+        ),
+        insert(
+            "links",
+            [
+                "id",
+                "local_port_id",
+                "local_device_id",
+                "remote_port_id",
+                "active",
+                "protocol",
+                "remote_hostname",
+                "remote_device_id",
+                "remote_port",
+                "remote_platform",
+                "remote_version",
+            ],
+            [
+                [
+                    link["id"],
+                    link["local_port_id"],
+                    link["local_device_id"],
+                    link["remote_port_id"],
+                    1,
+                    link["protocol"],
+                    devices[link["remote_device_id"]]["hostname"],
+                    link["remote_device_id"],
+                    ports[link["remote_port_id"]]["if_name"],
+                    "synthetic",
+                    "",
+                ]
+                for link in data["native_links"]
+            ],
+        ),
+        insert(
+            "ipv4_addresses",
+            [
+                "ipv4_address_id",
+                "ipv4_address",
+                "ipv4_prefixlen",
+                "ipv4_network_id",
+                "port_id",
+                "context_name",
+            ],
+            [
+                [
+                    row["id"],
+                    row["address"],
+                    row["prefixlen"],
+                    0,
+                    row["port_id"],
+                    row["context"],
+                ]
+                for row in data["ip_addresses"]
+                if row["family"] == 4
+            ],
+        ),
+        insert(
+            "ipv4_mac",
+            [
+                "id",
+                "port_id",
+                "device_id",
+                "mac_address",
+                "ipv4_address",
+                "context_name",
+            ],
+            [
+                [
+                    row["id"],
+                    row["port_id"],
+                    row["device_id"],
+                    row["mac_address"],
+                    row["ipv4_address"],
+                    row["context"],
+                ]
+                for row in data["mac_adjacencies"]
+            ],
+        ),
+        insert(
+            "bgpPeers",
+            [
+                "bgpPeer_id",
+                "device_id",
+                "astext",
+                "bgpPeerIdentifier",
+                "bgpPeerRemoteAs",
+                "bgpPeerState",
+                "bgpPeerAdminStatus",
+                "bgpPeerIface",
+                "bgpLocalAddr",
+                "bgpPeerRemoteAddr",
+                "bgpPeerDescr",
+                "bgpPeerInUpdates",
+                "bgpPeerOutUpdates",
+                "bgpPeerInTotalMessages",
+                "bgpPeerOutTotalMessages",
+                "bgpPeerFsmEstablishedTime",
+                "bgpPeerInUpdateElapsedTime",
+                "context_name",
+            ],
+            [
+                [
+                    row["id"],
+                    row["device_id"],
+                    str(row["remote_as"]),
+                    row["identifier"],
+                    row["remote_as"],
+                    row["state"],
+                    "start",
+                    row["if_index"],
+                    row["local_address"],
+                    row["remote_address"],
+                    row["description"],
+                    0,
+                    0,
+                    0,
+                    0,
+                    3600,
+                    0,
+                    row["context"],
+                ]
+                for row in data["bgp_peers"]
+            ],
+        ),
+        insert(
+            "ospf_instances",
+            [
+                "id",
+                "device_id",
+                "ospf_instance_id",
+                "ospfRouterId",
+                "ospfAdminStat",
+                "ospfVersionNumber",
+                "ospfAreaBdrRtrStatus",
+                "ospfASBdrRtrStatus",
+                "ospfExternLsaCount",
+                "ospfExternLsaCksumSum",
+                "ospfTOSSupport",
+                "ospfOriginateNewLsas",
+                "ospfRxNewLsas",
+                "context_name",
+            ],
+            [
+                [
+                    row["id"],
+                    row["device_id"],
+                    0,
+                    row["router_id"],
+                    "enabled",
+                    "version2",
+                    "false",
+                    "false",
+                    0,
+                    0,
+                    "false",
+                    0,
+                    0,
+                    row["context"],
+                ]
+                for row in data["ospf_instances"]
+            ],
+        ),
+        insert(
+            "ospf_nbrs",
+            [
+                "id",
+                "device_id",
+                "port_id",
+                "ospf_nbr_id",
+                "ospfNbrIpAddr",
+                "ospfNbrAddressLessIndex",
+                "ospfNbrRtrId",
+                "ospfNbrOptions",
+                "ospfNbrPriority",
+                "ospfNbrState",
+                "ospfNbrEvents",
+                "ospfNbrLsRetransQLen",
+                "ospfNbmaNbrStatus",
+                "ospfNbmaNbrPermanence",
+                "ospfNbrHelloSuppressed",
+                "context_name",
+            ],
+            [
+                [
+                    row["id"],
+                    row["device_id"],
+                    row["port_id"],
+                    str(row["id"]),
+                    row["neighbor_address"],
+                    0,
+                    row["router_id"],
+                    0,
+                    1,
+                    row["state"],
+                    0,
+                    0,
+                    "valid",
+                    "dynamic",
+                    "false",
+                    row["context"],
+                ]
+                for row in data["ospf_neighbors"]
+            ],
+        ),
+        insert(
+            "custom_maps",
+            [
+                "custom_map_id",
+                "name",
+                "width",
+                "height",
+                "node_align",
+                "reverse_arrows",
+                "edge_separation",
+                "options",
+                "newnodeconfig",
+                "newedgeconfig",
+                "menu_group",
+                "background_type",
+                "background_data",
+            ],
+            [
+                [
+                    reference["id"],
+                    reference["name"],
+                    reference["width"],
+                    reference["height"],
+                    10,
+                    0,
+                    10,
+                    json.dumps(options, separators=(",", ":")),
+                    json.dumps(new_node, separators=(",", ":")),
+                    json.dumps(new_edge, separators=(",", ":")),
+                    "Libremapper Test",
+                    "none",
+                    None,
+                ]
+            ],
+        ),
+        insert(
+            "custom_map_nodes",
+            [
+                "custom_map_node_id",
+                "custom_map_id",
+                "device_id",
+                "label",
+                "style",
+                "icon",
+                "image",
+                "size",
+                "border_width",
+                "text_face",
+                "text_size",
+                "text_colour",
+                "colour_bg",
+                "colour_bdr",
+                "x_pos",
+                "y_pos",
+            ],
+            [
+                [
+                    node["id"],
+                    reference["id"],
+                    node["device_id"],
+                    node["label"],
+                    node["style"],
+                    node["icon"],
+                    node["image"],
+                    node["size"],
+                    node["border_width"],
+                    node["text_face"],
+                    node["text_size"],
+                    node["text_colour"],
+                    node["colour_bg"],
+                    node["colour_bdr"],
+                    node["x"],
+                    node["y"],
+                ]
+                for node in reference["nodes"]
+            ],
+        ),
+        insert(
+            "custom_map_edges",
+            [
+                "custom_map_edge_id",
+                "custom_map_id",
+                "custom_map_node1_id",
+                "custom_map_node2_id",
+                "port_id",
+                "reverse",
+                "style",
+                "showpct",
+                "showbps",
+                "label",
+                "fixed_width",
+                "text_face",
+                "text_size",
+                "text_colour",
+                "text_align",
+                "mid_x",
+                "mid_y",
+            ],
+            [
+                [
+                    edge["id"],
+                    reference["id"],
+                    edge["node1"],
+                    edge["node2"],
+                    edge["port_id"],
+                    edge["reverse"],
+                    edge["style"],
+                    edge["showpct"],
+                    edge["showbps"],
+                    edge["label"],
+                    edge["fixed_width"],
+                    edge["text_face"],
+                    edge["text_size"],
+                    edge["text_colour"],
+                    edge["text_align"],
+                    edge["mid_x"],
+                    edge["mid_y"],
+                ]
+                for edge in reference["edges"]
+            ],
+        ),
+        "SET FOREIGN_KEY_CHECKS=1;\n",
+    ]
+    sql = "\n".join(statements)
+    return re.sub(r"'__IP__([^']+)'", r"INET6_ATON('\1')", sql)
+
+
+def render_artifacts(data: dict[str, Any]) -> dict[str, str]:
+    outputs: dict[str, str] = {}
+    for file_number, artifact in enumerate(data["artifacts"], 1):
+        blocks = []
+        for neighbor_number, neighbor in enumerate(artifact["neighbors"], 1):
+            mac = f"02:ff:{file_number:02x}:00:00:{neighbor_number:02x}"
+            address = neighbor["remote_ip"] or f"198.51.100.{file_number * 10 + neighbor_number}"
+            blocks.append(
+                "\n".join(
+                    [
+                        "+--------------------+-----------------------------------------+",
+                        f"| interface          | {neighbor['local_interface']}",
+                        f"| chassis-id         | {mac}",
+                        f"| port-id            | {neighbor['remote_interface']}",
+                        f"| system-name        | {neighbor['remote_hostname']}",
+                        f"| management-address | {address}",
+                    ]
+                )
+            )
+        name = f"topology/{artifact['hostname']}--lldp-neighbors"
+        outputs[name] = "\n\n".join(blocks) + "\n"
+    return outputs
+
+
+def expected_files(fixture: Path) -> dict[Path, str]:
+    data = json.loads((fixture / "topology.json").read_text())
+    validate(data)
+    files = {fixture / "librenms-seed.sql": render_sql(data)}
+    files.update(
+        {fixture / "artifacts" / name: text for name, text in render_artifacts(data).items()}
+    )
+    return files
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--fixture", type=Path, default=DEFAULT_FIXTURE)
+    parser.add_argument("--check", action="store_true")
+    args = parser.parse_args()
+    files = expected_files(args.fixture)
+    if args.check:
+        stale = [
+            str(path)
+            for path, content in files.items()
+            if not path.is_file() or path.read_text() != content
+        ]
+        expected_artifacts = {path for path in files if "artifacts" in path.parts}
+        actual_artifacts = {
+            path for path in (args.fixture / "artifacts").rglob("*") if path.is_file()
+        }
+        stale.extend(str(path) for path in sorted(actual_artifacts - expected_artifacts))
+        if stale:
+            raise SystemExit("stale generated fixture files:\n" + "\n".join(stale))
+    else:
+        for path, content in files.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content)
+    print(f"fixture ok: {len(files) - 1} artifacts")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+LOCAL_DEV_DIR="${ROOT}/.realdata-dev"
+export LOCAL_DEV_DIR
+
+if [[ ! -f "${LOCAL_DEV_DIR}/.env" || ! -f "${LOCAL_DEV_DIR}/image.env" ]]; then
+  echo "Run scripts/dev-stack reset first." >&2
+  exit 1
+fi
+
+exec docker compose \
+  --project-name libremapper-realdata-dev \
+  --env-file "${LOCAL_DEV_DIR}/.env" \
+  --env-file "${LOCAL_DEV_DIR}/image.env" \
+  --file "${ROOT}/dev/compose.yaml" \
+  exec -T \
+  -e LIBREMAPPER_CONFIG=/config/libremapper.yaml \
+  libremapper libremapper "$@"
